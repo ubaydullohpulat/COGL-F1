@@ -22,7 +22,7 @@ fi
 
 echo "==> Building Swift app (release)"
 (cd "$ROOT/app" && swift build -c release --arch arm64)
-BIN="$ROOT/app/.build/arm64-apple-macosx/release/COGLF1"
+BIN="$ROOT/app/.build/release/COGLF1"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"

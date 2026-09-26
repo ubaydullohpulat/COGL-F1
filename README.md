@@ -66,6 +66,20 @@ cd app && swift build                             # compile the app
 COGLF1_PYTHON=$PWD/../.venv/bin/python .build/debug/COGLF1   # run against the dev venv
 ```
 
+## Release
+
+Pushing a version tag builds, notarizes, and publishes the DMG. The tag must match `__version__` in `engine/coglf1_engine/__init__.py`. For `0.1.1` that file contains `__version__ = "0.1.1"` and the tag is `v0.1.1`.
+
+Commit the version bump to `main`, then:
+
+```bash
+git push origin main
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+The workflow is `.github/workflows/release.yml`. It runs only on that tag push. The DMG is attached to the GitHub Release when the Actions run succeeds.
+
 ## License
 
 The app and engine code are Apache-2.0 (see `LICENSE`). TimesFM 3.0 **weights** are released by Google under the *TimesFM Non-Commercial License v1.0*: research and non-production use only. Fine-tuned models inherit that license.

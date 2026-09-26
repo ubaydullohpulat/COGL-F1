@@ -54,24 +54,28 @@ struct ModelBar: View {
       if state.isLoadingModel {
         ProgressView().controlSize(.small).frame(width: 60)
       } else if isLoadedSelection {
-        Button("Eject") { Task { await state.unloadModel() } }
+        Button("Unload") { Task { await state.unloadModel() } }
+          .fixedSize()
           .help("Unload the model and free memory (⇧⌘E)")
       } else {
         Button(state.status?.loaded == true ? "Switch" : "Load") { Task { await state.loadSelectedModel() } }
           .buttonStyle(.borderedProminent)
+          .fixedSize()
           .disabled(state.selectedModelId == nil || !state.engine.isRunning)
           .help("Load the model into memory (⌘L)")
       }
 
-      if let s = state.status, s.loaded {
+      if state.status?.loaded == true {
         HStack(spacing: 4) {
           Circle().fill(.green).frame(width: 7, height: 7)
-          Text("\(Backend(rawValue: s.backend ?? "")?.short ?? "") · \(Fmt.duration(s.loadSeconds ?? 0))")
-            .font(.caption).foregroundStyle(.secondary)
+          Text("Ready")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize()
         }
-        .help("Loaded \(s.modelId ?? "") on \(s.backend ?? "")")
       }
     }
+    .fixedSize(horizontal: true, vertical: true)
   }
 
   private var selected: LocalModel? { state.models.first { $0.id == state.selectedModelId } }
@@ -123,38 +127,39 @@ struct ModelFlagsEditor: View {
   var body: some View {
     @Bindable var state = state
     let supported = Set(state.status?.supportedFlags ?? ModelFlags().dict.keys.map { $0 })
-    let why = "Not implemented by the \(state.status?.backend ?? "") backend in this TimesFM release; switch to PyTorch to change it."
-    VStack(alignment: .leading, spacing: 8) {
-      Toggle("Stitching", isOn: $state.modelFlags.useStitching)
-        .help("use_stitching: overlap-and-stitch output patches for smoother long horizons.")
-      Toggle("Linear detrending", isOn: $state.modelFlags.useLinearDetrending)
-        .help("use_linear_detrending: remove a linear trend from the context when it explains enough variance.")
-      HStack {
-        Text("Detrend threshold").foregroundStyle(state.modelFlags.useLinearDetrending ? .primary : .secondary)
-        Slider(value: $state.modelFlags.linearDetrendingThreshold, in: 0...1, step: 0.05)
-        Text(String(format: "%.2f", state.modelFlags.linearDetrendingThreshold)).monospacedDigit().frame(width: 36)
+    let why = "This engine cannot change this setting."
+    VStack(alignment: .leading, spacing: Theme.space) {
+      flag("Smooth long forecasts", "Overlaps the forecast pieces so a long horizon does not jump.", $state.modelFlags.useStitching)
+      flag("Remove a straight trend", "Takes out a straight line when the series is mostly that line.", $state.modelFlags.useLinearDetrending)
+      if state.modelFlags.useLinearDetrending {
+        HStack {
+          Text("Trend strength")
+          Slider(value: $state.modelFlags.linearDetrendingThreshold, in: 0...1, step: 0.05)
+          Text(String(format: "%.2f", state.modelFlags.linearDetrendingThreshold)).monospacedDigit().frame(width: 36)
+        }
       }
-      .disabled(!state.modelFlags.useLinearDetrending)
-      .help("linear_detrending_threshold: detrend when std(detrended) < threshold × std(original).")
-      Toggle("Iterative CPM-RevIN", isOn: $state.modelFlags.useIterativeCpmRevin)
-        .disabled(!supported.contains("use_iterative_cpm_revin"))
-        .help(supported.contains("use_iterative_cpm_revin") ? "use_iterative_cpm_revin: iterative reversible instance normalization refinement." : why)
-      Toggle("Frozen running stats", isOn: $state.modelFlags.useFrozenRunningStats)
-        .disabled(!supported.contains("use_frozen_running_stats"))
-        .help(supported.contains("use_frozen_running_stats") ? "use_frozen_running_stats: freeze RevIN statistics at the context boundary." : why)
-      HStack {
-        Text("Value clip")
-        Spacer()
-        TextField("", value: $state.modelFlags.valueClip, format: .number.notation(.scientific), prompt: Text("1e20"))
+      flag("Refine the scale", supported.contains("use_iterative_cpm_revin") ? "A second pass that steadies the size of the forecast." : why, $state.modelFlags.useIterativeCpmRevin, enabled: supported.contains("use_iterative_cpm_revin"))
+      flag("Freeze the scale", supported.contains("use_frozen_running_stats") ? "Keep the scale fixed at the last known point." : why, $state.modelFlags.useFrozenRunningStats, enabled: supported.contains("use_frozen_running_stats"))
+      HStack(spacing: Theme.space) {
+        Text("Limit extreme values")
+        TextField("", value: $state.modelFlags.valueClip, format: .number.notation(.scientific))
           .labelsHidden()
           .textFieldStyle(.roundedBorder)
           .frame(width: 100)
+        HintButton(text: "Cuts off values larger than this, so a wild number cannot dominate the forecast.")
       }
-      .help("value_clip: absolute value inputs/outputs are clipped to.")
     }
     .onChange(of: state.modelFlags) { _, new in
       state.loadSettings.overrides = new.dict.filter { supported.contains($0.key) }
       Task { await state.applyModelFlags() }
+    }
+  }
+
+  private func flag(_ title: String, _ hint: String, _ isOn: Binding<Bool>, enabled: Bool = true) -> some View {
+    HStack(spacing: Theme.space) {
+      Toggle(title, isOn: isOn)
+        .disabled(!enabled)
+      HintButton(text: hint)
     }
   }
 }

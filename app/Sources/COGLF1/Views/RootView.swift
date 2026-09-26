@@ -9,13 +9,19 @@ struct RootView: View {
       List(selection: $state.section) {
         Section {
           ForEach(SidebarSection.allCases) { s in
-            Label(s.title, systemImage: s.icon)
-              .badge(badge(for: s))
-              .tag(s)
+            Label {
+              Text(s.title).font(.title3)
+            } icon: {
+              Image(systemName: s.icon).font(.title3)
+            }
+            .padding(.vertical, Theme.space)
+            .badge(badge(for: s))
+            .tag(s)
           }
         }
       }
-      .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
+      .environment(\.defaultMinListRowHeight, 48)
+      .navigationSplitViewColumnWidth(min: 220, ideal: 248, max: 300)
       .safeAreaInset(edge: .bottom) { EngineFooter().padding(10) }
     } detail: {
       Group {
@@ -81,7 +87,7 @@ struct EngineFooter: View {
 
   private var title: String {
     switch state.engine.state {
-    case .running: return state.status?.loaded == true ? "Model loaded" : "Engine ready"
+    case .running: return state.status?.loaded == true ? "Model loaded" : "Ready"
     case .starting: return "Starting engine…"
     case .checking: return "Checking runtime…"
     case .installing: return "Installing runtime…"

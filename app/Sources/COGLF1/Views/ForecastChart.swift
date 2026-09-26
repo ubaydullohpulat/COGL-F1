@@ -31,13 +31,14 @@ struct ForecastChart: View {
   var windows: [ForecastWindow]
   var display: ChartDisplay
   var horizon: Int
+  var zoom: Binding<Double> = .constant(1)
 
   var body: some View {
     let useDates = target.history.time != nil && windows.allSatisfy { $0.time != nil }
     if useDates {
-      SeriesChart<Date>(model: build { t, _ in t.flatMap(Fmt.date) }, display: display)
+      SeriesChart<Date>(model: build { t, _ in t.flatMap(Fmt.date) }, display: display, zoom: zoom)
     } else {
-      SeriesChart<Int>(model: build { _, i in i }, display: display)
+      SeriesChart<Int>(model: build { _, i in i }, display: display, zoom: zoom)
     }
   }
 
@@ -95,9 +96,13 @@ struct SeriesModel<X: ChartX> {
 private struct SeriesChart<X: ChartX>: View {
   var model: SeriesModel<X>
   var display: ChartDisplay
+  @Binding var zoom: Double
   @State private var hoverX: X?
+  @State private var hoverPoint: CGPoint?
+  @State private var zoomAnchor: Double = 1
 
   var body: some View {
+    let length = visibleLength
     Chart {
       historyMarks
       ForEach(model.windows, id: \.window) { w in
@@ -108,21 +113,45 @@ private struct SeriesChart<X: ChartX>: View {
     .chartYScale(domain: .automatic(includesZero: false))
     .chartXAxis { AxisMarks(values: .automatic(desiredCount: 6)) }
     .chartLegend(.hidden)
+    .chartScrollableAxes(zoom > 1.05 ? .horizontal : [])
+    .chartXVisibleDomain(length: length)
     .chartOverlay { proxy in
       GeometryReader { geo in
         Rectangle().fill(.clear).contentShape(Rectangle())
           .onContinuousHover { phase in
             switch phase {
             case .active(let loc):
+              hoverPoint = loc
               guard let plot = proxy.plotFrame else { return }
               let x = loc.x - geo[plot].origin.x
               if let v: X = proxy.value(atX: x, as: X.self) { hoverX = nearest(to: v) }
             case .ended:
               hoverX = nil
+              hoverPoint = nil
             }
           }
+          .simultaneousGesture(
+            MagnifyGesture()
+              .onChanged { value in
+                zoom = min(12, max(1, zoomAnchor * value.magnification))
+              }
+              .onEnded { _ in zoomAnchor = zoom }
+          )
+        if let hoverX, let hoverPoint {
+          tooltip(at: hoverX)
+            .fixedSize()
+            .position(tooltipPosition(hoverPoint, in: geo.size))
+            .allowsHitTesting(false)
+        }
       }
     }
+  }
+
+  /// How much of the x axis stays on screen. Dates are seconds; steps are counts.
+  private var visibleLength: Int {
+    let values = allXs.map(\.numeric)
+    guard let lo = values.min(), let hi = values.max(), hi > lo else { return 1 }
+    return max(1, Int(((hi - lo) / zoom).rounded()))
   }
 
   @ChartContentBuilder private var historyMarks: some ChartContent {
@@ -194,13 +223,17 @@ private struct SeriesChart<X: ChartX>: View {
     if let hx = hoverX {
       RuleMark(x: .value("Hover", hx))
         .foregroundStyle(Color.secondary.opacity(0.6))
-        .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
-          tooltip(at: hx)
-        }
     }
   }
 
   private var allXs: [X] { model.history.map(\.0) + model.windows.flatMap { $0.steps.map(\.x) } }
+
+  private func tooltipPosition(_ point: CGPoint, in size: CGSize) -> CGPoint {
+    CGPoint(
+      x: min(max(point.x, 120), max(120, size.width - 120)),
+      y: point.y < 100 ? point.y + 72 : point.y - 64
+    )
+  }
 
   private func nearest(to v: X) -> X? {
     allXs.min { abs($0.numeric - v.numeric) < abs($1.numeric - v.numeric) }

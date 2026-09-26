@@ -62,9 +62,9 @@ enum Backend: String, CaseIterable, Identifiable {
   var id: String { rawValue }
   var title: String {
     switch self {
-    case .mlx: return "MLX · Apple GPU"
-    case .torchMPS: return "PyTorch · Metal"
-    case .torchCPU: return "PyTorch · CPU"
+    case .mlx: return "Apple GPU"
+    case .torchMPS: return "Metal"
+    case .torchCPU: return "CPU"
     }
   }
   var short: String {

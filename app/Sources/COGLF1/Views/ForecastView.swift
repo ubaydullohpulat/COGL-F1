@@ -10,24 +10,36 @@ struct ForecastView: View {
   @State private var targetName: String?
   @State private var windowFilter: Int? = nil  // nil = all windows
   @State private var bottomTab = 0
+  @State private var chartZoom: Double = 1
 
   var body: some View {
     HStack(spacing: 0) {
-      DataPanel().frame(width: 300)
-      Divider()
+      if state.dataset != nil {
+        DataPanel().frame(width: 300)
+        Divider()
+      }
       center.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
     }
-    .inspector(isPresented: $showInspector) {
+    .inspector(isPresented: inspectorPresented) {
       ForecastInspector(display: $display)
         .inspectorColumnWidth(min: 290, ideal: 320, max: 400)
     }
     .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button { showInspector.toggle() } label: { Label("Parameters", systemImage: "sidebar.right") }
-          .help("Show or hide forecast parameters")
+      if state.dataset != nil {
+        ToolbarItem(placement: .primaryAction) {
+          Button { showInspector.toggle() } label: { Label("Parameters", systemImage: "sidebar.right") }
+            .help("Show or hide forecast parameters")
+        }
       }
     }
     .navigationTitle("Forecast")
+  }
+
+  private var inspectorPresented: Binding<Bool> {
+    Binding(
+      get: { showInspector && state.dataset != nil },
+      set: { showInspector = $0 }
+    )
   }
 
   @ViewBuilder private var center: some View {
@@ -67,7 +79,7 @@ struct ForecastView: View {
       } label: {
         HStack(spacing: 6) {
           if state.isForecasting { ProgressView().controlSize(.small) } else { Image(systemName: "play.fill") }
-          Text(state.params.backtest ? "Run backtest" : "Run forecast")
+          Text(state.params.backtest ? "Compare" : "Run")
         }
         .frame(minWidth: 120)
       }
@@ -83,7 +95,7 @@ struct ForecastView: View {
           .textFieldStyle(.roundedBorder)
         Stepper("", value: $state.params.horizon, in: 1...4096).labelsHidden()
       }
-      Toggle("Backtest", isOn: $state.params.backtest)
+      Toggle("Compare", isOn: $state.params.backtest)
         .toggleStyle(.switch)
         .fixedSize()
         .help("Hide the last horizon of history, forecast it, and score against what actually happened.")
@@ -140,6 +152,19 @@ struct ForecastView: View {
       HStack {
         Legend(backtest: r.backtest, bands: display.bands).fixedSize()
         Spacer()
+        HStack(spacing: Theme.space) {
+          Button { chartZoom = max(1, chartZoom / 1.4); } label: { Image(systemName: "minus.magnifyingglass") }
+            .help("Zoom out")
+          Button { chartZoom = 1 } label: {
+            Text("\(Int((chartZoom * 100).rounded()))%")
+              .monospacedDigit()
+              .frame(minWidth: 44)
+          }
+          .help("Show the whole chart. When zoomed in, scroll sideways to move.")
+          Button { chartZoom = min(12, chartZoom * 1.4) } label: { Image(systemName: "plus.magnifyingglass") }
+            .help("Zoom in")
+        }
+        .buttonStyle(.borderless)
         Button {
           copyChart(r: r, target: target)
         } label: {
@@ -152,7 +177,7 @@ struct ForecastView: View {
 
       if let t = target {
         let ws = t.windows.filter { windowFilter == nil || $0.window == windowFilter }
-        ForecastChart(target: t, windows: ws, display: display, horizon: r.horizon)
+        ForecastChart(target: t, windows: ws, display: display, horizon: r.horizon, zoom: $chartZoom)
           .padding(.horizontal, 16).padding(.vertical, 10)
           .frame(minHeight: 280)
         if let m = (windowFilter.flatMap { wf in t.windows.first { $0.window == wf }?.metrics }) ?? t.metrics {
@@ -179,7 +204,10 @@ struct ForecastView: View {
       }
       .frame(height: 220)
     }
-    .onChange(of: r.resultId) { _, _ in windowFilter = nil }
+    .onChange(of: r.resultId) { _, _ in
+      windowFilter = nil
+      chartZoom = 1
+    }
   }
 
   @MainActor private func copyChart(r: ForecastResult, target: ForecastTarget?) {
@@ -359,74 +387,98 @@ struct ForecastInspector: View {
   @Environment(AppState.self) private var state
   @Binding var display: ChartDisplay
   @State private var autoContext = true
+  @State private var showAdvanced = false
 
   var body: some View {
     @Bindable var state = state
     Form {
       Section("Forecast") {
         LabeledContent("Horizon") {
-          HStack {
+          HStack(spacing: Theme.space) {
             TextField("", value: $state.params.horizon, format: .number).frame(width: 64)
             Stepper("", value: $state.params.horizon, in: 1...4096).labelsHidden()
+            HintButton(text: "How many steps into the future to predict.")
           }
         }
-        .help("How many future steps to predict (TimesFM 3 decodes the whole horizon in one pass).")
-        Toggle("Use all available history", isOn: $autoContext)
+        Toggle("Use all history", isOn: $autoContext)
           .onChange(of: autoContext) { _, v in state.params.contextLength = v ? nil : (state.params.contextLength ?? 1024) }
         if !autoContext {
-          LabeledContent("Context length") {
+          LabeledContent("History length") {
             HStack {
               TextField("", value: Binding(get: { state.params.contextLength ?? 1024 }, set: { state.params.contextLength = max(8, min($0, 15360)) }), format: .number)
-                .frame(width: 70)
+                .frame(width: 72)
               Stepper("", value: Binding(get: { state.params.contextLength ?? 1024 }, set: { state.params.contextLength = max(32, min($0, 15360)) }), in: 32...15360, step: 32)
                 .labelsHidden()
             }
           }
-          .help("Most recent points fed to the model (≤ 15,360). Longer context helps with long seasonality.")
         }
-        Picker("Mode", selection: $state.params.mode) {
-          Text("Joint (multivariate)").tag("joint")
-          Text("Independent").tag("independent")
+        HStack(spacing: Theme.space) {
+          Picker("Mode", selection: $state.params.mode) {
+            Text("Together").tag("joint")
+            Text("Separately").tag("independent")
+          }
+          HintButton(text: "Together uses how the series move with each other. Separately forecasts each one on its own.")
         }
-        .help("Joint lets TimesFM 3's variate attention learn cross-series structure between targets. Independent forecasts each target alone.")
       }
 
-      Section("Backtest") {
-        Toggle("Hold out & score", isOn: $state.params.backtest)
-        Stepper(value: $state.params.backtestWindows, in: 1...50) {
-          LabeledContent("Windows", value: "\(state.params.backtestWindows)")
+      Section {
+        HStack(spacing: Theme.space) {
+          Toggle("Compare with recent history", isOn: $state.params.backtest)
+          HintButton(text: "Hide the latest stretch, forecast it, and score that against what actually happened.")
         }
-        .disabled(!state.params.backtest)
-        .help("Number of rolling-origin windows, each one horizon apart. Metrics are averaged.")
-        LabeledContent("Step") {
-          TextField("", value: $state.params.backtestStep, format: .number, prompt: Text("horizon"))
-            .frame(width: 90)
-            .fixedSize()
+        if state.params.backtest {
+          Stepper(value: $state.params.backtestWindows, in: 1...50) {
+            LabeledContent("Windows", value: "\(state.params.backtestWindows)")
+          }
+          if state.params.backtestWindows >= 2 {
+            Toggle("Same as horizon", isOn: Binding(
+              get: { state.params.backtestStep == nil },
+              set: { state.params.backtestStep = $0 ? nil : max(1, state.params.horizon) }
+            ))
+            if let step = state.params.backtestStep {
+              Stepper(value: Binding(
+                get: { step },
+                set: { state.params.backtestStep = max(1, $0) }
+              ), in: 1...4096) {
+                LabeledContent("Step", value: "\(step)")
+              }
+            }
+          }
         }
-        .disabled(!state.params.backtest || state.params.backtestWindows < 2)
       }
 
-      Section("Inference flags") {
-        Toggle("Symmetric averaging", isOn: $state.params.useSymmetricAveraging)
-          .help("use_symmetric_averaging: also forecast the negated series and average. Often more robust, 2× compute.")
-        Toggle("Z-normalize inputs", isOn: $state.params.useZnorm)
-          .help("use_znorm: standardize each series (and covariates) before the model, then undo on the output.")
-        Toggle("Force non-negative", isOn: $state.params.makePositive)
-          .help("make_positive: clamp forecasts at 0 for series whose history is non-negative (sales, counts).")
-        Toggle("Sort quantiles", isOn: $state.params.sortQuantiles)
-          .help("sort_quantiles: guarantee P10 ≤ … ≤ P90 (fixes quantile crossing).")
-        Picker("Covariate padding", selection: $state.params.paddingMode) {
-          Text("None").tag("none")
-          Text("Edge (repeat last)").tag("edge")
+      Section {
+        Button {
+          withAnimation(.easeInOut(duration: 0.2)) { showAdvanced.toggle() }
+        } label: {
+          HStack(spacing: Theme.space) {
+            Image(systemName: "chevron.right")
+              .rotationEffect(.degrees(showAdvanced ? 90 : 0))
+              .font(.body.weight(.semibold))
+              .frame(width: 28, height: 28)
+            Text("Advanced")
+              .font(.body)
+            Spacer(minLength: 0)
+          }
+          .contentShape(Rectangle())
+          .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
         }
-        .help("padding_mode: 'edge' extends future covariates that are shorter than the horizon by repeating their last value.")
-      }
-
-      Section("Model flags") {
-        if state.status?.loaded == true {
-          ModelFlagsEditor()
-        } else {
-          Text("Load a model to change its flags.").foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+        if showAdvanced {
+          hintedToggle("Average both directions", "Also forecast the flipped series and average the two. Often steadier, and slower.", $state.params.useSymmetricAveraging)
+          hintedToggle("Standardize the data", "Scale each series before forecasting, then scale the result back.", $state.params.useZnorm)
+          hintedToggle("Keep results at zero or above", "For sales and counts that never go below zero.", $state.params.makePositive)
+          hintedToggle("Keep the ranges in order", "Makes the lower estimate stay below the upper one.", $state.params.sortQuantiles)
+          HStack(spacing: Theme.space) {
+            Picker("If future values run short", selection: $state.params.paddingMode) {
+              Text("Leave empty").tag("none")
+              Text("Repeat last").tag("edge")
+            }
+            HintButton(text: "When known future values stop early, leave the rest empty or repeat the last value.")
+          }
+          if state.status?.loaded == true {
+            ModelFlagsEditor()
+          }
         }
       }
 
@@ -463,6 +515,13 @@ struct ForecastInspector: View {
     .formStyle(.grouped)
     .onAppear { autoContext = state.params.contextLength == nil }
   }
+
+  private func hintedToggle(_ title: String, _ hint: String, _ isOn: Binding<Bool>) -> some View {
+    HStack(spacing: Theme.space) {
+      Toggle(title, isOn: isOn)
+      HintButton(text: hint)
+    }
+  }
 }
 
 // MARK: - Empty states
@@ -470,52 +529,51 @@ struct ForecastInspector: View {
 struct EmptyDataState: View {
   @Environment(AppState.self) private var state
   var body: some View {
-    VStack(spacing: 22) {
-      Image(systemName: "square.and.arrow.down.on.square")
-        .font(.system(size: 54, weight: .light))
-        .foregroundStyle(.tint)
-      VStack(spacing: 6) {
-        Text("Drop a CSV or Excel file").font(.title2.weight(.semibold))
-        Text("One column per series (wide) or one row per id and date (long). A date column is detected automatically.")
-          .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 460)
-      }
-      Button { state.chooseFile() } label: { Label("Open file…", systemImage: "folder") }
-        .buttonStyle(.borderedProminent).controlSize(.large)
-      VStack(spacing: 8) {
-        Text("Or try a sample").font(.caption).foregroundStyle(.secondary)
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 230))], spacing: 10) {
-          ForEach(Samples.all, id: \.file) { s in
-            Button {
+    EmptyState(title: "Drop a CSV or Excel file", systemImage: "square.and.arrow.down.on.square") {
+      Button { state.chooseFile() } label: { Label("Open file", systemImage: "folder") }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+      VStack(spacing: Theme.space) {
+        Text("Samples")
+          .font(.body)
+          .foregroundStyle(.secondary)
+        HStack(spacing: Theme.space * 2) {
+          ForEach(Samples.all) { s in
+            ChoiceCard(title: s.title, systemImage: s.icon) {
               Task { await state.openSample(s.file) }
-            } label: {
-              VStack(alignment: .leading, spacing: 3) {
-                Label(s.title, systemImage: s.icon).font(.callout.weight(.medium))
-                Text(s.subtitle).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.leading)
-                  .fixedSize(horizontal: false, vertical: true)
-              }
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .padding(10)
-              .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
           }
         }
-        .frame(maxWidth: 720)
       }
+      .frame(maxWidth: 640)
     }
-    .padding(24)
-    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 
 enum Samples {
-  struct Sample { var file: String; var title: String; var subtitle: String; var icon: String }
+  struct Sample: Identifiable {
+    var file: String
+    var title: String
+    var icon: String
+    var id: String { file }
+  }
   static let all: [Sample] = [
-    .init(file: "retail_sales.csv", title: "Retail sales", subtitle: "Daily sales & visits, temperature, planned promos", icon: "cart"),
-    .init(file: "energy_load.csv", title: "Energy load", subtitle: "Hourly load with a weather forecast covariate", icon: "bolt"),
-    .init(file: "store_revenue.xlsx", title: "Store revenue", subtitle: "Monthly revenue for 5 stores (long format, Excel)", icon: "building.2"),
+    .init(file: "retail_sales.csv", title: "Retail sales", icon: "cart"),
+    .init(file: "energy_load.csv", title: "Energy load", icon: "bolt"),
+    .init(file: "store_revenue.xlsx", title: "Store revenue", icon: "building.2"),
   ]
+}
+
+#Preview("Empty forecast") {
+  EmptyDataState()
+    .environment(AppState())
+    .frame(width: 980, height: 680)
+}
+
+#Preview("Parameters") {
+  ForecastInspector(display: .constant(ChartDisplay()))
+    .environment(AppState())
+    .frame(width: 340, height: 720)
 }
 
 struct SetupChecklist: View {

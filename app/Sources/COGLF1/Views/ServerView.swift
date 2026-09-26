@@ -174,48 +174,194 @@ struct APIDocs: View {
   }
 }
 
+private struct SchemeBox<Content: View>: NSViewRepresentable {
+  var scheme: ColorScheme
+  var content: Content
+
+  init(scheme: ColorScheme, @ViewBuilder content: () -> Content) {
+    self.scheme = scheme
+    self.content = content()
+  }
+
+  func makeNSView(context: Context) -> NSHostingView<Content> {
+    let host = NSHostingView(rootView: content)
+    host.sizingOptions = [.minSize, .intrinsicContentSize, .maxSize]
+    apply(host)
+    return host
+  }
+
+  func updateNSView(_ host: NSHostingView<Content>, context: Context) {
+    host.rootView = content
+    apply(host)
+  }
+
+  private func apply(_ host: NSView) {
+    host.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+  }
+}
+
+private struct PreviewRow: Identifiable {
+  var id: Int
+  var cells: [String]
+}
+
+private struct PreviewColumn: Identifiable {
+  var id: Int
+  var name: String
+}
+
+private struct PreviewTable: NSViewRepresentable {
+  var columns: [PreviewColumn]
+  var rows: [PreviewRow]
+  var size: CGFloat
+  var role: (String) -> String
+  var scheme: ColorScheme?
+
+  func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+  func makeNSView(context: Context) -> NSScrollView {
+    let table = NSTableView()
+    table.style = .inset
+    table.usesAlternatingRowBackgroundColors = true
+    table.allowsColumnReordering = true
+    table.allowsColumnResizing = true
+    table.columnAutoresizingStyle = .sequentialColumnAutoresizingStyle
+    table.headerView = NSTableHeaderView()
+    table.dataSource = context.coordinator
+    table.delegate = context.coordinator
+    let scroll = NSScrollView()
+    scroll.documentView = table
+    scroll.hasVerticalScroller = true
+    scroll.hasHorizontalScroller = true
+    scroll.drawsBackground = true
+    scroll.autohidesScrollers = true
+    return scroll
+  }
+
+  func updateNSView(_ scroll: NSScrollView, context: Context) {
+    context.coordinator.parent = self
+    guard let table = scroll.documentView as? NSTableView else { return }
+    let ids = columns.map { NSUserInterfaceItemIdentifier("\($0.id)") }
+    if table.tableColumns.map(\.identifier) != ids {
+      for column in table.tableColumns { table.removeTableColumn(column) }
+      for column in columns {
+        let tableColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("\(column.id)"))
+        tableColumn.minWidth = 88
+        tableColumn.width = max(150, 150 * size / 13)
+        tableColumn.resizingMask = .userResizingMask
+        table.addTableColumn(tableColumn)
+      }
+    }
+    let headerFont = NSFont.systemFont(ofSize: size, weight: .semibold)
+    for column in columns {
+      guard let tableColumn = table.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier("\(column.id)")) else { continue }
+      tableColumn.title = "\(column.name) · \(role(column.name))"
+      tableColumn.headerCell.font = headerFont
+    }
+    table.rowHeight = size + 14
+    table.reloadData()
+    switch scheme {
+    case .light: scroll.appearance = NSAppearance(named: .aqua)
+    case .dark: scroll.appearance = NSAppearance(named: .darkAqua)
+    case nil: scroll.appearance = nil
+    default: scroll.appearance = nil
+    }
+  }
+
+  final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    var parent: PreviewTable
+    init(_ parent: PreviewTable) { self.parent = parent }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { parent.rows.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+      guard let tableColumn, let index = Int(tableColumn.identifier.rawValue), parent.rows.indices.contains(row) else { return nil }
+      let id = NSUserInterfaceItemIdentifier("cell")
+      let field = (tableView.makeView(withIdentifier: id, owner: nil) as? NSTextField) ?? NSTextField(labelWithString: "")
+      field.identifier = id
+      let cells = parent.rows[row].cells
+      field.stringValue = index < cells.count ? cells[index] : ""
+      field.font = .monospacedSystemFont(ofSize: parent.size, weight: .regular)
+      field.textColor = .labelColor
+      field.lineBreakMode = .byTruncatingTail
+      field.isEditable = false
+      return field
+    }
+  }
+}
+
 struct DataView: View {
   @Environment(AppState.self) private var state
+  @Environment(\.colorScheme) private var appScheme
+  @State private var zoom: CGFloat = 1
+  @State private var zoomAnchor: CGFloat = 1
+  @State private var scheme: ColorScheme?
 
   var body: some View {
     if let sheet = state.sheet {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack {
-          Text(state.dataset?.name ?? "").font(.title2.weight(.semibold))
-          Text("· \(sheet.name) · \(sheet.rows) rows · \(sheet.columns.count) columns").foregroundStyle(.secondary)
-          Spacer()
-          Button { state.chooseFile() } label: { Label("Open…", systemImage: "folder") }
-        }
-        Text("Preview of the first \(sheet.preview.rows.count) rows").font(.caption).foregroundStyle(.secondary)
-        ScrollView([.horizontal, .vertical]) {
-          Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-            GridRow {
-              ForEach(sheet.preview.columns, id: \.self) { c in
-                VStack(alignment: .leading, spacing: 2) {
-                  Text(c).font(.callout.weight(.semibold))
-                  Text(roleText(c, sheet)).font(.caption2).foregroundStyle(roleColor(c, sheet))
-                }
-                .padding(8)
-                .frame(minWidth: 110, alignment: .leading)
-                .background(.quaternary.opacity(0.5))
-              }
-            }
-            ForEach(Array(sheet.preview.rows.enumerated()), id: \.offset) { i, row in
-              GridRow {
-                ForEach(Array(row.enumerated()), id: \.offset) { _, v in
-                  Text(v.description)
-                    .font(.callout.monospacedDigit())
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .frame(minWidth: 110, alignment: .leading)
-                    .background(i % 2 == 0 ? Color.clear : Color.primary.opacity(0.03))
-                }
-              }
-            }
+      viewer(sheet)
+        .navigationTitle("Data")
+    } else {
+      EmptyDataState().navigationTitle("Data")
+    }
+  }
+
+  private func viewer(_ sheet: SheetInfo) -> some View {
+    let columns = sheet.preview.columns.enumerated().map { PreviewColumn(id: $0.offset, name: $0.element) }
+    let rows = sheet.preview.rows.enumerated().map { index, row in
+      PreviewRow(id: index, cells: row.map(\.description))
+    }
+    let size = 13 * zoom
+    return VStack(alignment: .leading, spacing: Theme.space * 2) {
+      HStack(spacing: Theme.space * 2) {
+        Text(state.dataset?.name ?? "").font(.title2.weight(.semibold))
+        Text("\(sheet.rows) rows").foregroundStyle(.secondary)
+        Spacer()
+        HStack(spacing: Theme.space) {
+          Button { zoomOut() } label: { Image(systemName: "minus.magnifyingglass") }
+            .help("Zoom out")
+          Button { zoom = 1; zoomAnchor = 1 } label: {
+            Text("\(Int((zoom * 100).rounded()))%")
+              .monospacedDigit()
+              .frame(minWidth: 52)
           }
-          .textSelection(.enabled)
+          .help("Actual size")
+          Button { zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
+            .help("Zoom in")
         }
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
-        Text("Column statistics").font(.headline).padding(.top, 6)
+        .controlSize(.large)
+        .buttonStyle(.borderless)
+        Button {
+          scheme = tableScheme == .dark ? .light : .dark
+        } label: {
+          Image(systemName: tableScheme == .dark ? "sun.max" : "moon")
+        }
+        .controlSize(.large)
+        .buttonStyle(.borderless)
+        .help(tableScheme == .dark ? "Light table" : "Dark table")
+        Button { state.chooseFile() } label: { Label("Open", systemImage: "folder") }
+          .controlSize(.large)
+      }
+      PreviewTable(
+        columns: columns,
+        rows: rows,
+        size: size,
+        role: { roleText($0, sheet) },
+        scheme: tableScheme
+      )
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(.background)
+      .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(.separator))
+      .gesture(
+        MagnifyGesture()
+          .onChanged { value in
+            zoom = min(2, max(0.75, zoomAnchor * value.magnification))
+          }
+          .onEnded { _ in zoomAnchor = zoom }
+      )
+      Text("Column statistics").font(.title3.weight(.semibold))
+      SchemeBox(scheme: tableScheme) {
         Table(sheet.columns) {
           TableColumn("Column", value: \.name)
           TableColumn("Type") { c in Text(c.numeric ? "numeric" : c.dtype) }
@@ -226,13 +372,25 @@ struct DataView: View {
           TableColumn("Max") { c in Text(Fmt.number(c.max)) }
           TableColumn("Std") { c in Text(Fmt.number(c.std)) }
         }
-        .frame(height: 200)
+        .font(.system(size: size))
+        .alternatingRowBackgrounds()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      .padding(20)
-      .navigationTitle("Data")
-    } else {
-      EmptyDataState().navigationTitle("Data")
+      .frame(minHeight: 160, idealHeight: 200, maxHeight: 280)
     }
+    .padding(Theme.space * 2)
+  }
+
+  private var tableScheme: ColorScheme { scheme ?? appScheme }
+
+  private func zoomIn() {
+    zoom = min(2, zoom + 0.1)
+    zoomAnchor = zoom
+  }
+
+  private func zoomOut() {
+    zoom = max(0.75, zoom - 0.1)
+    zoomAnchor = zoom
   }
 
   private func roleText(_ c: String, _ s: SheetInfo) -> String {
@@ -242,10 +400,6 @@ struct DataView: View {
     return r.title.lowercased()
   }
 
-  private func roleColor(_ c: String, _ s: SheetInfo) -> Color {
-    if c == state.timeColumn || c == state.idColumn { return .blue }
-    return state.roles[c]?.color ?? .secondary
-  }
 }
 
 struct SettingsView: View {

@@ -1,0 +1,78 @@
+name: Release
+
+# Push a tag that matches engine/coglf1_engine/__init__.py, for example v0.1.1.
+# Required repository secrets:
+#   APPLE_CERTIFICATE              base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD     password for that .p12
+#   APPLE_ID                       Apple ID email
+#   APPLE_TEAM_ID                  team id, for example C7GJU2743A
+#   APPLE_APP_SPECIFIC_PASSWORD    notarization app-specific password
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches __version__
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' engine/coglf1_engine/__init__.py)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [[ "$tag" != "$version" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match __version__ ${version}"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cert="$RUNNER_TEMP/certificate.p12"
+          keychain="$RUNNER_TEMP/app-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 24)"
+          echo "$keychain_password" > "$RUNNER_TEMP/keychain-password"
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$cert"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+
+      - name: Store notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          xcrun notarytool store-credentials cogl-notary \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD"
+
+      - name: Build and notarize
+        run: NOTARY_PROFILE=cogl-notary scripts/build_app.sh --dmg
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/COGL-F1-${VERSION}.dmg" \
+            "dist/COGL-F1-${VERSION}.dmg.sha256" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

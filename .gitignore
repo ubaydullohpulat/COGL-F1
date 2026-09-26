@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.build/
+.swiftpm/
+dist/
+build/
+*.xcodeproj/xcuserdata/
+engine/tests/_out/

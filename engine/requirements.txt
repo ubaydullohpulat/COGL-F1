@@ -1,0 +1,10 @@
+# COGL-F1 engine runtime. Installed by the app into its private venv on first launch.
+timesfm[mlx,torch]==3.0.2
+numpy>=1.26
+pandas>=2.2
+openpyxl>=3.1
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+huggingface_hub>=0.28
+safetensors>=0.4

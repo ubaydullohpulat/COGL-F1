@@ -1,0 +1,160 @@
+import SwiftUI
+
+/// Top-center model picker, in the spirit of LM Studio: pick → load → eject.
+struct ModelBar: View {
+  @Environment(AppState.self) private var state
+  @State private var showOptions = false
+
+  var body: some View {
+    @Bindable var state = state
+    HStack(spacing: 8) {
+      Menu {
+        if state.models.isEmpty {
+          Button("Download TimesFM 3…") { state.section = .models }
+        }
+        ForEach(state.models) { m in
+          Button {
+            state.selectedModelId = m.id
+          } label: {
+            Label("\(m.displayName)  ·  \(Fmt.bytes(m.sizeBytes))", systemImage: m.isFinetuned ? "wand.and.stars" : "cube")
+          }
+        }
+        Divider()
+        Button("Manage models…") { state.section = .models }
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: selected?.isFinetuned == true ? "wand.and.stars" : "cube.fill")
+            .foregroundStyle(.tint)
+          Text(selected?.displayName ?? "Select a model to load")
+            .lineLimit(1)
+        }
+        .frame(minWidth: 220, alignment: .leading)
+      }
+      .menuStyle(.borderlessButton)
+      .fixedSize()
+
+      Picker("Backend", selection: $state.backend) {
+        ForEach(Backend.allCases) { b in Text(b.title).tag(b) }
+      }
+      .labelsHidden()
+      .pickerStyle(.menu)
+      .fixedSize()
+      .help("Inference backend. MLX runs natively on the Apple GPU and is usually fastest.")
+
+      Button {
+        showOptions.toggle()
+      } label: {
+        Image(systemName: "slider.horizontal.3")
+      }
+      .help("Load options and model flags")
+      .popover(isPresented: $showOptions, arrowEdge: .bottom) {
+        LoadOptionsView().environment(state).frame(width: 380).padding()
+      }
+
+      if state.isLoadingModel {
+        ProgressView().controlSize(.small).frame(width: 60)
+      } else if isLoadedSelection {
+        Button("Eject") { Task { await state.unloadModel() } }
+          .help("Unload the model and free memory (⇧⌘E)")
+      } else {
+        Button(state.status?.loaded == true ? "Switch" : "Load") { Task { await state.loadSelectedModel() } }
+          .buttonStyle(.borderedProminent)
+          .disabled(state.selectedModelId == nil || !state.engine.isRunning)
+          .help("Load the model into memory (⌘L)")
+      }
+
+      if let s = state.status, s.loaded {
+        HStack(spacing: 4) {
+          Circle().fill(.green).frame(width: 7, height: 7)
+          Text("\(Backend(rawValue: s.backend ?? "")?.short ?? "") · \(Fmt.duration(s.loadSeconds ?? 0))")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        .help("Loaded \(s.modelId ?? "") on \(s.backend ?? "")")
+      }
+    }
+  }
+
+  private var selected: LocalModel? { state.models.first { $0.id == state.selectedModelId } }
+  private var isLoadedSelection: Bool {
+    state.status?.loaded == true && state.status?.modelId == state.selectedModelId && state.status?.backend == state.backend.rawValue
+  }
+}
+
+struct LoadOptionsView: View {
+  @Environment(AppState.self) private var state
+
+  var body: some View {
+    @Bindable var state = state
+    VStack(alignment: .leading, spacing: 14) {
+      Text("Load options").font(.headline)
+      Form {
+        Toggle("Compile graph (MLX)", isOn: $state.loadSettings.compile)
+          .help("mx.compile fuses kernels: faster repeated forecasts, slower first run.")
+        Stepper(value: $state.loadSettings.perCoreBatchSize, in: 1...512, step: 1) {
+          LabeledContent("Batch size", value: "\(state.loadSettings.perCoreBatchSize)")
+        }
+        .help("per_core_batch_size: how many series are decoded per forward pass.")
+        Stepper(value: $state.loadSettings.maxContextLength, in: 32...15360, step: 512) {
+          LabeledContent("Max context", value: "\(state.loadSettings.maxContextLength)")
+        }
+        .help("Longest history fed to the model (TimesFM 3 supports up to 15,360 points).")
+      }
+      .formStyle(.columns)
+      Divider()
+      Text("Model flags").font(.headline)
+      Text("Changed flags apply to the loaded model immediately and are kept on reload.")
+        .font(.caption).foregroundStyle(.secondary)
+      ModelFlagsEditor()
+      HStack {
+        Button("Reset flags to checkpoint defaults") {
+          state.modelFlags = ModelFlags()
+          state.loadSettings.overrides = [:]
+          Task { await state.applyModelFlags() }
+        }
+        Spacer()
+      }
+    }
+  }
+}
+
+struct ModelFlagsEditor: View {
+  @Environment(AppState.self) private var state
+
+  var body: some View {
+    @Bindable var state = state
+    let supported = Set(state.status?.supportedFlags ?? ModelFlags().dict.keys.map { $0 })
+    let why = "Not implemented by the \(state.status?.backend ?? "") backend in this TimesFM release; switch to PyTorch to change it."
+    VStack(alignment: .leading, spacing: 8) {
+      Toggle("Stitching", isOn: $state.modelFlags.useStitching)
+        .help("use_stitching: overlap-and-stitch output patches for smoother long horizons.")
+      Toggle("Linear detrending", isOn: $state.modelFlags.useLinearDetrending)
+        .help("use_linear_detrending: remove a linear trend from the context when it explains enough variance.")
+      HStack {
+        Text("Detrend threshold").foregroundStyle(state.modelFlags.useLinearDetrending ? .primary : .secondary)
+        Slider(value: $state.modelFlags.linearDetrendingThreshold, in: 0...1, step: 0.05)
+        Text(String(format: "%.2f", state.modelFlags.linearDetrendingThreshold)).monospacedDigit().frame(width: 36)
+      }
+      .disabled(!state.modelFlags.useLinearDetrending)
+      .help("linear_detrending_threshold: detrend when std(detrended) < threshold × std(original).")
+      Toggle("Iterative CPM-RevIN", isOn: $state.modelFlags.useIterativeCpmRevin)
+        .disabled(!supported.contains("use_iterative_cpm_revin"))
+        .help(supported.contains("use_iterative_cpm_revin") ? "use_iterative_cpm_revin: iterative reversible instance normalization refinement." : why)
+      Toggle("Frozen running stats", isOn: $state.modelFlags.useFrozenRunningStats)
+        .disabled(!supported.contains("use_frozen_running_stats"))
+        .help(supported.contains("use_frozen_running_stats") ? "use_frozen_running_stats: freeze RevIN statistics at the context boundary." : why)
+      HStack {
+        Text("Value clip")
+        Spacer()
+        TextField("", value: $state.modelFlags.valueClip, format: .number.notation(.scientific), prompt: Text("1e20"))
+          .labelsHidden()
+          .textFieldStyle(.roundedBorder)
+          .frame(width: 100)
+      }
+      .help("value_clip: absolute value inputs/outputs are clipped to.")
+    }
+    .onChange(of: state.modelFlags) { _, new in
+      state.loadSettings.overrides = new.dict.filter { supported.contains($0.key) }
+      Task { await state.applyModelFlags() }
+    }
+  }
+}

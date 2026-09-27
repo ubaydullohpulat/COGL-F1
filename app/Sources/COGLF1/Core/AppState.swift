@@ -12,16 +12,16 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     case .data: return "Data"
     case .finetune: return "Fine-tune"
     case .models: return "Models"
-    case .server: return "Engine & API"
+    case .server: return "Engine"
     }
   }
   var icon: String {
     switch self {
-    case .forecast: return "chart.xyaxis.line"
+    case .forecast: return "chart.line.uptrend.xyaxis"
     case .data: return "tablecells"
-    case .finetune: return "slider.horizontal.below.square.and.square.filled"
+    case .finetune: return "slider.horizontal.3"
     case .models: return "shippingbox"
-    case .server: return "server.rack"
+    case .server: return "cpu"
     }
   }
 }
@@ -212,6 +212,7 @@ struct SeriesSelection: Encodable {
 final class AppState {
   let engine = EngineManager()
   let downloader = ModelDownloader()
+  let catalog = ModelCatalog()
 
   var section: SidebarSection = .forecast
   var alert: String?
@@ -320,7 +321,7 @@ final class AppState {
          let m = try? JSONDecoder().decode([String: JSONValue].self, from: d) { meta = m }
       return LocalModel(
         id: name, path: p.path, sizeBytes: size, kind: meta["kind"]?.stringValue ?? "base",
-        source: meta["source"]?.stringValue, displayName: meta["display_name"]?.stringValue ?? name,
+        source: meta["source"]?.stringValue, storedName: meta["display_name"]?.stringValue ?? name,
         meta: meta, architecture: .init(), flags: [:])
     }
   }
@@ -440,6 +441,7 @@ final class AppState {
       let ds = try await client.post("datasets/open", body: ["path": url.path], as: DatasetInfo.self)
       let previous = (sheetName, timeColumn, idColumn, roles)
       dataset = ds
+      remember(url)
       if keepSelection, ds.sheets.contains(where: { $0.name == previous.0 }) {
         (sheetName, timeColumn, idColumn, roles) = previous
       } else {
@@ -449,6 +451,19 @@ final class AppState {
       alert = error.localizedDescription
     }
   }
+
+  /// Files opened lately, newest first. Bundled samples are not listed; they have their own cards.
+  private(set) var recentFiles: [String] = UserDefaults.standard.stringArray(forKey: "recentFiles") ?? [] {
+    didSet { UserDefaults.standard.set(recentFiles, forKey: "recentFiles") }
+  }
+
+  private func remember(_ url: URL) {
+    let path = url.standardizedFileURL.path
+    guard !Samples.all.contains(where: { Self.sampleURL($0.file)?.standardizedFileURL.path == path }) else { return }
+    recentFiles = Array(([path] + recentFiles.filter { $0 != path }).prefix(5))
+  }
+
+  func clearRecentFiles() { recentFiles = [] }
 
   func openSample(_ name: String) async {
     guard let url = Self.sampleURL(name) else { alert = "Sample not found."; return }
@@ -488,7 +503,7 @@ final class AppState {
 
   func runForecast() async {
     guard let sel = selection() else { alert = "Open a CSV or Excel file first."; return }
-    guard !sel.targets.isEmpty else { alert = "Mark at least one column as Target."; return }
+    guard !sel.targets.isEmpty else { alert = "Set at least one column to Predict."; return }
     if status?.loaded != true {
       await loadSelectedModel()
       guard status?.loaded == true else { return }
@@ -528,7 +543,7 @@ final class AppState {
 
   func startFinetune() async {
     guard let sel = selection() else { alert = "Open a data file first."; return }
-    guard !sel.targets.isEmpty else { alert = "Mark at least one column as Target in the data panel."; return }
+    guard !sel.targets.isEmpty else { alert = "Set at least one column to Predict in the data panel."; return }
     guard !ftSettings.baseModelId.isEmpty else { alert = "Download a base model first."; return }
     struct Body: Encodable { var data: SeriesSelection; var config: FinetuneSettings }
     do {

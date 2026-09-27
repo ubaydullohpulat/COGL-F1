@@ -84,6 +84,10 @@ final class ModelDownloader {
       guard wanted.contains(where: { $0.path == "config.json" }), wanted.contains(where: { $0.path == "model.safetensors" }) else {
         throw EngineError(message: "\(repo) is not a TimesFM 3 checkpoint (config.json + model.safetensors not found).")
       }
+      // Check the small config first, so an unusable model never costs a large download.
+      guard await ModelCatalog.checkConfig(repo: repo, revision: revision, token: token) else {
+        throw EngineError(message: "\(repo) is a different kind of model. This app runs TimesFM 3 checkpoints.")
+      }
       let total = wanted.reduce(Int64(0)) { $0 + ($1.lfs?.size ?? $1.size) }
       progress[repo]?.total = total
       progress[repo]?.phase = .downloading

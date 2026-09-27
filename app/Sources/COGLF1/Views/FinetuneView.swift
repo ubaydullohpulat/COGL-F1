@@ -6,7 +6,7 @@ struct FinetuneView: View {
 
   var body: some View {
     HStack(spacing: 0) {
-      DataPanel().frame(width: 300)
+      DataPanel().frame(width: DataPanel.width)
       Divider()
       if !state.engine.isRunning || !state.hasModel {
         SetupChecklist()
@@ -45,7 +45,7 @@ struct FinetuneForm: View {
       } header: {
         Text("Model")
       } footer: {
-        Text("Targets and covariates come from the data panel. The result is saved as a new model you can load like the base one.")
+        Text("The columns to learn from come from the data panel. The result is saved as a new model you can load like the base one.")
       }
 
       Section("Method") {
@@ -57,7 +57,7 @@ struct FinetuneForm: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        Text(methodHelp).font(.caption).foregroundStyle(.secondary)
+        Text(methodHelp).font(.note).foregroundStyle(.secondary)
         if state.ftSettings.method == "lora" {
           Stepper(value: $state.ftSettings.loraRank, in: 1...256) { LabeledContent("Rank r", value: "\(state.ftSettings.loraRank)") }
           LabeledContent("Alpha") { TextField("", value: $state.ftSettings.loraAlpha, format: .number).frame(width: 70) }
@@ -136,7 +136,7 @@ struct FinetuneForm: View {
           .disabled(running || state.targets.isEmpty || state.dataset == nil)
         }
         if state.dataset == nil || state.targets.isEmpty {
-          Text("Open a file and mark target columns in the data panel.").font(.caption).foregroundStyle(.secondary)
+          Text("Open a file and mark target columns in the data panel.").font(.note).foregroundStyle(.secondary)
         }
       } footer: {
         Text("Fine-tuned weights inherit the base model's license. Full fine-tuning of 330M parameters needs ≈ 6–10 GB of unified memory.")
@@ -182,11 +182,11 @@ struct FinetuneMonitor: View {
 
   var body: some View {
     if let job = state.ftJob {
-      VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 16) {
         HStack {
-          VStack(alignment: .leading, spacing: 3) {
-            Text(job.title).font(.title3.weight(.semibold))
-            Text(statusText(job)).font(.callout).foregroundStyle(job.status == "failed" ? .red : .secondary)
+          VStack(alignment: .leading, spacing: 4) {
+            Text(job.title).font(.rowTitle.weight(.semibold))
+            Text(statusText(job)).font(.text).foregroundStyle(job.status == "failed" ? .red : .secondary)
           }
           Spacer()
           if job.isActive {
@@ -197,11 +197,11 @@ struct FinetuneMonitor: View {
         }
         ProgressView(value: job.progress)
         if job.status == "completed", let r = job.result { resultCard(r) }
-        if let e = job.error { Text(e).foregroundStyle(.red).font(.callout).textSelection(.enabled) }
+        if let e = job.error { Text(e).foregroundStyle(.red).font(.text).textSelection(.enabled) }
         charts(job)
         LogView(lines: job.logs)
       }
-      .padding(18)
+      .padding(16)
     } else {
       ContentUnavailableView {
         Label("Adapt TimesFM 3 to your data", systemImage: "wand.and.stars")
@@ -222,14 +222,14 @@ struct FinetuneMonitor: View {
 
   @ViewBuilder private func resultCard(_ r: JSONValue) -> some View {
     let id = r["model_id"]?.stringValue ?? ""
-    HStack(spacing: 14) {
-      Image(systemName: "checkmark.seal.fill").font(.title).foregroundStyle(.green)
-      VStack(alignment: .leading, spacing: 3) {
-        Text("Saved as \(id)").font(.headline)
+    HStack(spacing: 16) {
+      Image(systemName: "checkmark.seal.fill").font(.pageTitle).foregroundStyle(.green)
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Saved as \(id)").font(.text.weight(.semibold))
         if let imp = r["improvement_percent"]?.doubleValue {
           Text(imp > 0 ? String(format: "Validation loss %.1f%% lower than zero-shot (best epoch %d)", imp, Int(r["best_epoch"]?.doubleValue ?? 0))
                        : "Did not beat the zero-shot model on validation; weights saved unchanged.")
-            .font(.callout).foregroundStyle(.secondary)
+            .font(.text).foregroundStyle(.secondary)
         }
       }
       Spacer()
@@ -244,7 +244,7 @@ struct FinetuneMonitor: View {
       .buttonStyle(.borderedProminent)
     }
     .padding(12)
-    .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    .background(.green.opacity(0.08), in: Theme.shape)
   }
 
   @ViewBuilder private func charts(_ job: JobSnapshot) -> some View {
@@ -258,9 +258,9 @@ struct FinetuneMonitor: View {
         guard let e = m["epoch"]?.doubleValue, let l = m["val_loss"]?.doubleValue else { return nil }
         return (Int(e), l, m["val_mae"]?.doubleValue)
       }
-    HStack(spacing: 14) {
+    HStack(spacing: 16) {
       VStack(alignment: .leading) {
-        Text("Training loss").font(.caption).foregroundStyle(.secondary)
+        Text("Training loss").font(.note).foregroundStyle(.secondary)
         Chart {
           ForEach(train, id: \.0) { s, l in
             LineMark(x: .value("Step", s), y: .value("Loss", l)).foregroundStyle(Color.accentColor)
@@ -269,13 +269,13 @@ struct FinetuneMonitor: View {
         .chartYScale(domain: .automatic(includesZero: false))
       }
       VStack(alignment: .leading) {
-        Text("Validation loss per epoch (0 = zero-shot)").font(.caption).foregroundStyle(.secondary)
+        Text("Validation loss per epoch (0 = zero-shot)").font(.note).foregroundStyle(.secondary)
         Chart {
           if let base = val.first(where: { $0.0 == 0 }) {
             RuleMark(y: .value("Zero-shot", base.1))
               .foregroundStyle(.secondary)
               .lineStyle(StrokeStyle(dash: [4, 3]))
-              .annotation(position: .top, alignment: .leading) { Text("zero-shot").font(.caption2).foregroundStyle(.secondary) }
+              .annotation(position: .top, alignment: .leading) { Text("zero-shot").font(.note).foregroundStyle(.secondary) }
           }
           ForEach(val, id: \.0) { e, l, _ in
             LineMark(x: .value("Epoch", e), y: .value("Val loss", l)).foregroundStyle(.purple)
@@ -296,14 +296,14 @@ struct LogView: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 1) {
           ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
-            Text(l).font(.system(size: 11, design: .monospaced)).textSelection(.enabled).id(i)
+            Text(l).font(.code).textSelection(.enabled).id(i)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
         }
         .padding(8)
       }
-      .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
-      .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+      .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: Theme.shape)
+      .overlay(Theme.shape.strokeBorder(Theme.border))
       .onChange(of: lines.count) { _, n in if n > 0 { proxy.scrollTo(n - 1, anchor: .bottom) } }
     }
   }

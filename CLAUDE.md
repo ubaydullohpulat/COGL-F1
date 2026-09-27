@@ -8,7 +8,7 @@ The app is for someone who is not a forecasting specialist. It should look like 
 
 Read `.claude/skills/macos-ui/SKILL.md` before changing SwiftUI.
 
-Shared pieces live in `app/Sources/COGLF1/Views/Theme.swift`: spacing, radius, `EmptyState`, `ChoiceCard`, `HintButton`. Use those. Do not invent a second visual style.
+Shared pieces live in `app/Sources/COGLF1/Views/Theme.swift`: spacing, the five text sizes, `Theme.shape`, `Theme.fill`, `Theme.border`, `.card()`, `EmptyState`, `ChoiceCard`, `HintButton`. Use those. Do not invent a second visual style.
 
 ## Release
 

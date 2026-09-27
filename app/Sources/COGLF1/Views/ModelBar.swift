@@ -7,7 +7,7 @@ struct ModelBar: View {
 
   var body: some View {
     @Bindable var state = state
-    HStack(spacing: 8) {
+    HStack(spacing: 12) {
       Menu {
         if state.models.isEmpty {
           Button("Download TimesFM 3…") { state.section = .models }
@@ -22,7 +22,7 @@ struct ModelBar: View {
         Divider()
         Button("Manage models…") { state.section = .models }
       } label: {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
           Image(systemName: selected?.isFinetuned == true ? "wand.and.stars" : "cube.fill")
             .foregroundStyle(.tint)
           Text(selected?.displayName ?? "Select a model to load")
@@ -58,10 +58,14 @@ struct ModelBar: View {
           .fixedSize()
           .help("Unload the model and free memory (⇧⌘E)")
       } else {
-        Button(state.status?.loaded == true ? "Switch" : "Load") { Task { await state.loadSelectedModel() } }
-          .buttonStyle(.borderedProminent)
+        // Not a prominent button: in a toolbar that turns every label in the bar white.
+        Button { Task { await state.loadSelectedModel() } } label: {
+          Text(state.status?.loaded == true ? "Switch" : "Load")
+            .fontWeight(.semibold)
+            .foregroundStyle(canLoad ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+        }
           .fixedSize()
-          .disabled(state.selectedModelId == nil || !state.engine.isRunning)
+          .disabled(!canLoad)
           .help("Load the model into memory (⌘L)")
       }
 
@@ -69,16 +73,18 @@ struct ModelBar: View {
         HStack(spacing: 4) {
           Circle().fill(.green).frame(width: 7, height: 7)
           Text("Ready")
-            .font(.callout)
+            .font(.text)
             .foregroundStyle(.secondary)
             .fixedSize()
         }
       }
     }
+    .padding(.horizontal, Theme.space * 2)
     .fixedSize(horizontal: true, vertical: true)
   }
 
   private var selected: LocalModel? { state.models.first { $0.id == state.selectedModelId } }
+  private var canLoad: Bool { state.selectedModelId != nil && state.engine.isRunning }
   private var isLoadedSelection: Bool {
     state.status?.loaded == true && state.status?.modelId == state.selectedModelId && state.status?.backend == state.backend.rawValue
   }
@@ -89,8 +95,8 @@ struct LoadOptionsView: View {
 
   var body: some View {
     @Bindable var state = state
-    VStack(alignment: .leading, spacing: 14) {
-      Text("Load options").font(.headline)
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Load options").font(.text.weight(.semibold))
       Form {
         Toggle("Compile graph (MLX)", isOn: $state.loadSettings.compile)
           .help("mx.compile fuses kernels: faster repeated forecasts, slower first run.")
@@ -105,9 +111,9 @@ struct LoadOptionsView: View {
       }
       .formStyle(.columns)
       Divider()
-      Text("Model flags").font(.headline)
+      Text("Model flags").font(.text.weight(.semibold))
       Text("Changed flags apply to the loaded model immediately and are kept on reload.")
-        .font(.caption).foregroundStyle(.secondary)
+        .font(.note).foregroundStyle(.secondary)
       ModelFlagsEditor()
       HStack {
         Button("Reset flags to checkpoint defaults") {

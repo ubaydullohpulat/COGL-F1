@@ -3,52 +3,34 @@ import SwiftUI
 
 struct ModelsView: View {
   @Environment(AppState.self) private var state
-  @State private var customRepo = ""
   @State private var confirmDelete: LocalModel?
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 22) {
+      VStack(alignment: .leading, spacing: 24) {
         header
         DownloadCard(repo: ModelDownloader.defaultRepo, title: "TimesFM 3.0", subtitle: "Google Research · 330M parameters",
                      facts: ["Zero-shot", "Multivariate", "Covariates", "9 quantiles", "Context 15K", "1.32 GB"],
                      featured: true)
 
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Other Hugging Face checkpoint").font(.headline)
-          Text("Any repository with a TimesFM 3 `config.json` + `model.safetensors` (e.g. your own fine-tunes pushed to the Hub).")
-            .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Theme.space * 1.5) {
           HStack {
-            TextField("owner/repository", text: $customRepo)
-              .textFieldStyle(.roundedBorder)
-              .frame(maxWidth: 360)
-              .onSubmit(download)
-            Button("Download", action: download)
-              .disabled(customRepo.trimmingCharacters(in: .whitespaces).isEmpty)
-            Button("Import folder…") { importFolder() }
-              .help("Copy a local checkpoint folder into the library")
-          }
-          ForEach(Array(state.downloader.progress.keys.filter { $0 != ModelDownloader.defaultRepo }.sorted()), id: \.self) { repo in
-            DownloadCard(repo: repo, title: repo, subtitle: "Hugging Face", facts: [], featured: false)
-          }
-        }
-
-        VStack(alignment: .leading, spacing: 10) {
-          HStack {
-            Text("My models").font(.title3.weight(.semibold))
+            Text("My models").font(.sectionTitle.weight(.semibold))
             Spacer()
             Button { NSWorkspace.shared.open(EngineManager.modelsDir) } label: { Label("Show in Finder", systemImage: "folder") }
             Button { Task { await state.refreshModels() } } label: { Image(systemName: "arrow.clockwise") }
           }
           if state.models.isEmpty {
             Text("No models yet. Download TimesFM 3 above.")
-              .foregroundStyle(.secondary).padding(.vertical, 20)
+              .foregroundStyle(.secondary).padding(.vertical, 16)
           } else {
             ForEach(state.models) { m in
               ModelRow(model: m, onDelete: { confirmDelete = m })
             }
           }
         }
+
+        CatalogSection(importFolder: importFolder)
       }
       .padding(24)
       .frame(maxWidth: 980, alignment: .leading)
@@ -66,17 +48,7 @@ struct ModelsView: View {
   }
 
   private var header: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text("Models").font(.largeTitle.weight(.semibold))
-      Text("Models live in \(EngineManager.modelsDir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
-        .font(.callout).foregroundStyle(.secondary)
-    }
-  }
-
-  private func download() {
-    let repo = customRepo.trimmingCharacters(in: .whitespaces)
-    guard repo.contains("/") else { state.alert = "Use the form owner/repository."; return }
-    state.downloader.start(repo: repo, token: Keychain.get("hf_token"))
+    Text("Models").font(.pageTitle.weight(.semibold))
   }
 
   private func importFolder() {
@@ -85,6 +57,108 @@ struct ModelsView: View {
     p.canChooseFiles = false
     p.message = "Choose a folder containing config.json and model.safetensors"
     if p.runModal() == .OK, let url = p.url { Task { await state.importModelFolder(url) } }
+  }
+}
+
+/// Other checkpoints on Hugging Face, with the ones this engine can run first.
+struct CatalogSection: View {
+  @Environment(AppState.self) private var state
+  var importFolder: () -> Void
+  @FocusState private var searchFocused: Bool
+
+  var body: some View {
+    @Bindable var catalog = state.catalog
+    VStack(alignment: .leading, spacing: Theme.space * 1.5) {
+      HStack {
+        HuggingFaceLogo()
+        Text("More on Hugging Face").font(.sectionTitle.weight(.semibold))
+        Spacer()
+        Button(action: importFolder) { Label("Import folder…", systemImage: "folder") }
+          .help("Copy a model folder from this Mac into the library")
+      }
+
+      HStack(spacing: Theme.space) {
+        Image(systemName: "magnifyingglass")
+          .foregroundStyle(.secondary)
+          .accessibilityHidden(true)
+        TextField("Search models, or type owner/name", text: $catalog.query)
+          .textFieldStyle(.plain)
+          .focused($searchFocused)
+          .onSubmit(submit)
+        if catalog.isSearching {
+          ProgressView().controlSize(.small)
+        } else if !catalog.query.isEmpty {
+          Button {
+            catalog.query = ""
+            searchFocused = true
+            Task { await catalog.search() }
+          } label: {
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+          }
+          .buttonStyle(.plain)
+          .help("Clear")
+        }
+      }
+      .font(.text)
+      .padding(.horizontal, 12)
+      .frame(height: 36)
+      .background(Theme.fill, in: Theme.shape)
+      .overlay(Theme.shape.strokeBorder(searchFocused ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear), lineWidth: 2))
+      .contentShape(Theme.shape)
+      .onTapGesture { searchFocused = true }
+
+      if let error = catalog.error, !catalog.isSearching {
+        Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
+      } else if catalog.searched && catalog.results.isEmpty && !catalog.isSearching {
+        Text("Nothing found. Press Return to search again.").foregroundStyle(.secondary)
+      }
+
+      // Downloads started by name, which a search may not list.
+      let listed = Set(catalog.results.map(\.repo))
+      ForEach(Array(state.downloader.progress.keys.filter { $0 != ModelDownloader.defaultRepo && !listed.contains($0) }.sorted()), id: \.self) { repo in
+        DownloadCard(repo: repo, title: repo, subtitle: "Hugging Face", facts: [], featured: false)
+      }
+      ForEach(catalog.results) { entry in
+        if entry.compatible {
+          DownloadCard(repo: entry.repo, title: entry.name, subtitle: subtitle(entry), facts: [], featured: false)
+        } else {
+          HStack(spacing: Theme.space * 1.5) {
+            VStack(alignment: .leading, spacing: 4) {
+              Text(entry.name).font(.text.weight(.semibold))
+              Text(subtitle(entry)).font(.text).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("Not supported yet").foregroundStyle(.secondary)
+              .help("This is a different kind of model. The app runs TimesFM 3 checkpoints.")
+          }
+          .card()
+          .opacity(0.6)
+        }
+      }
+      if !catalog.results.isEmpty {
+        Text("These are uploaded by other people. COGL-F1 checks that a model can run, not who made it or how good it is.")
+          .font(.note).foregroundStyle(.secondary)
+      }
+    }
+    .onAppear {
+      // Not tied to the page, so switching pages doesn't cancel it halfway.
+      if !catalog.searched { Task { await catalog.search() } }
+    }
+  }
+
+  /// "owner/name" downloads that model directly; anything else is a search.
+  private func submit() {
+    let catalog = state.catalog
+    let q = catalog.query.trimmingCharacters(in: .whitespacesAndNewlines)
+    if q.split(separator: "/").count == 2, !q.contains(" ") {
+      state.downloader.start(repo: q, token: Keychain.get("hf_token"))
+    } else {
+      Task { await catalog.search() }
+    }
+  }
+
+  private func subtitle(_ e: ModelCatalog.Entry) -> String {
+    "\(e.owner) · \(e.downloads.formatted(.number.notation(.compactName))) downloads"
   }
 }
 
@@ -100,55 +174,50 @@ struct DownloadCard: View {
   private var progress: ModelDownloader.Progress? { state.downloader.progress[repo] }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .top, spacing: 16) {
         if featured {
           ZStack {
-            RoundedRectangle(cornerRadius: 14).fill(LinearGradient(colors: [.blue, .teal], startPoint: .topLeading, endPoint: .bottomTrailing))
-            Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 28, weight: .semibold)).foregroundStyle(.white)
+            Theme.shape.fill(LinearGradient(colors: [.blue, .teal], startPoint: .topLeading, endPoint: .bottomTrailing))
+            Image(systemName: "chart.line.uptrend.xyaxis").font(.badgeIcon).foregroundStyle(.white)
           }
           .frame(width: 60, height: 60)
         }
         VStack(alignment: .leading, spacing: 4) {
-          Text(title).font(featured ? .title2.weight(.semibold) : .headline)
-          Text(featured ? "\(subtitle) · \(repo)" : subtitle).font(.callout).foregroundStyle(.secondary)
+          Text(title).font(featured ? .sectionTitle.weight(.semibold) : .text.weight(.semibold))
+          Text(featured ? "\(subtitle) · \(repo)" : subtitle).font(.text).foregroundStyle(.secondary)
           if !facts.isEmpty {
-            HStack(spacing: 6) { ForEach(facts, id: \.self) { Chip(icon: "checkmark", text: $0) } }.padding(.top, 4)
+            HStack(spacing: 8) { ForEach(facts, id: \.self) { Chip(icon: "checkmark", text: $0) } }.padding(.top, 4)
           }
         }
         Spacer()
         action
       }
       if let p = progress, [.listing, .downloading, .verifying].contains(p.phase) {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
           ProgressView(value: p.fraction)
           HStack {
-            Text(phaseText(p)).font(.caption).foregroundStyle(.secondary)
+            Text(phaseText(p)).font(.note).foregroundStyle(.secondary)
             Spacer()
-            Text("\(Fmt.bytes(p.received)) / \(Fmt.bytes(p.total))").font(.caption.monospacedDigit())
+            Text("\(Fmt.bytes(p.received)) / \(Fmt.bytes(p.total))").font(.note.monospacedDigit())
             if p.bytesPerSecond > 0 {
-              Text("· \(Fmt.bytes(Int64(p.bytesPerSecond)))/s").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+              Text("· \(Fmt.bytes(Int64(p.bytesPerSecond)))/s").font(.note.monospacedDigit()).foregroundStyle(.secondary)
             }
-            if let eta = p.eta { Text("· \(Fmt.duration(eta)) left").font(.caption).foregroundStyle(.secondary) }
+            if let eta = p.eta { Text("· \(Fmt.duration(eta)) left").font(.note).foregroundStyle(.secondary) }
           }
         }
       }
       if case .failed(let msg)? = progress?.phase {
-        Label(msg, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.callout)
+        Label(msg, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.text)
       }
       if featured {
         Text("Weights are released under the **TimesFM Non-Commercial License v1.0** (research / non-production use). The app and engine code are Apache-2.0.")
-          .font(.caption).foregroundStyle(.secondary)
+          .font(.note).foregroundStyle(.secondary)
         + Text("  ")
-        + Text("[View license](https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE)").font(.caption)
+        + Text("[View license](https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE)").font(.note)
       }
     }
-    .padding(featured ? 20 : 14)
-    .background(
-      RoundedRectangle(cornerRadius: 16)
-        .fill(featured ? AnyShapeStyle(.background.secondary) : AnyShapeStyle(.quaternary.opacity(0.4)))
-        .shadow(color: .black.opacity(featured ? 0.08 : 0), radius: 8, y: 2))
-    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.separator.opacity(0.6)))
+    .card()
   }
 
   @ViewBuilder private var action: some View {
@@ -200,27 +269,27 @@ struct ModelRow: View {
   var onDelete: () -> Void
 
   var body: some View {
-    HStack(spacing: 14) {
+    HStack(spacing: 16) {
       Image(systemName: model.isFinetuned ? "wand.and.stars" : "cube.fill")
-        .font(.title2)
+        .font(.sectionTitle)
         .foregroundStyle(model.isFinetuned ? Color.purple : Color.accentColor)
         .frame(width: 34)
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(spacing: 6) {
-          Text(model.displayName).font(.headline)
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 8) {
+          Text(model.displayName).font(.text.weight(.semibold))
           Text(model.isFinetuned ? "Fine-tuned" : "Base")
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6).padding(.vertical, 2)
+            .font(.note.weight(.semibold))
+            .padding(.horizontal, 8).padding(.vertical, 2)
             .background((model.isFinetuned ? Color.purple : Color.accentColor).opacity(0.15), in: Capsule())
           if state.loadedModelId == model.id {
-            Text("Loaded").font(.caption2.weight(.semibold)).foregroundStyle(.green)
+            Text("Loaded").font(.note.weight(.semibold)).foregroundStyle(.green)
           }
         }
-        Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        Text(detail).font(.note).foregroundStyle(.secondary).lineLimit(2)
       }
       Spacer()
-      Text(Fmt.bytes(model.sizeBytes)).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-      Button(state.loadedModelId == model.id ? "Eject" : "Load") {
+      Text(Fmt.bytes(model.sizeBytes)).font(.text.monospacedDigit()).foregroundStyle(.secondary)
+      Button(state.loadedModelId == model.id ? "Unload" : "Load") {
         if state.loadedModelId == model.id {
           Task { await state.unloadModel() }
         } else {
@@ -244,7 +313,7 @@ struct ModelRow: View {
       .fixedSize()
     }
     .padding(12)
-    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+    .background(Theme.fill, in: Theme.shape)
   }
 
   private var detail: String {

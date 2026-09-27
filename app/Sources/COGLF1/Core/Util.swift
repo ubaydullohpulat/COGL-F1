@@ -65,6 +65,15 @@ enum Fmt {
     return nil
   }
 
+  /// "1 Mar 2025" for people, where shortDate is for tables.
+  static func friendlyDate(_ s: String) -> String {
+    guard let d = date(s) else { return s }
+    let f = DateFormatter()
+    f.timeZone = TimeZone(identifier: "UTC")
+    f.dateFormat = "d MMM yyyy"
+    return f.string(from: d)
+  }
+
   static func shortDate(_ s: String) -> String {
     guard let d = date(s) else { return s }
     let f = DateFormatter()
@@ -72,5 +81,42 @@ enum Fmt {
     let hasTime = !s.hasSuffix("T00:00:00") && s.count > 10
     f.dateFormat = hasTime ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd"
     return f.string(from: d)
+  }
+}
+
+/// Plain names for the pandas frequency codes the engine reports.
+enum Freq {
+  private static let bases: [(code: String, name: String, unit: String)] = [
+    ("min", "Every minute", "minute"), ("T", "Every minute", "minute"), ("MS", "Monthly", "month"), ("ME", "Monthly", "month"),
+    ("M", "Monthly", "month"), ("QS", "Quarterly", "quarter"), ("QE", "Quarterly", "quarter"), ("Q", "Quarterly", "quarter"),
+    ("YS", "Yearly", "year"), ("YE", "Yearly", "year"), ("Y", "Yearly", "year"), ("D", "Daily", "day"),
+    ("B", "Working days", "working day"), ("h", "Hourly", "hour"), ("H", "Hourly", "hour"), ("W", "Weekly", "week"),
+    ("s", "Every second", "second"),
+  ]
+
+  private static func base(_ f: String?) -> (code: String, name: String, unit: String)? {
+    guard let f else { return nil }
+    return bases.first { f == $0.code || f.hasPrefix($0.code + "-") }
+  }
+
+  static func name(_ f: String) -> String { base(f)?.name ?? "Every \(f)" }
+
+  /// "hours", "days"… or "steps" when the spacing has no everyday name.
+  static func unit(_ f: String?, count: Int) -> String {
+    guard let u = base(f)?.unit else { return count == 1 ? "step" : "steps" }
+    return count == 1 ? u : u + "s"
+  }
+
+  static func presets(_ f: String?) -> [(title: String, steps: Int)] {
+    switch base(f)?.unit {
+    case "minute": return [("1 hour", 60), ("6 hours", 360), ("1 day", 1440)]
+    case "hour": return [("1 day", 24), ("3 days", 72), ("1 week", 168)]
+    case "day": return [("1 week", 7), ("1 month", 30), ("3 months", 90)]
+    case "working day": return [("1 week", 5), ("1 month", 21), ("3 months", 63)]
+    case "week": return [("1 month", 4), ("3 months", 13), ("1 year", 52)]
+    case "month": return [("3 months", 3), ("6 months", 6), ("1 year", 12)]
+    case "quarter": return [("1 year", 4), ("2 years", 8)]
+    default: return []
+    }
   }
 }

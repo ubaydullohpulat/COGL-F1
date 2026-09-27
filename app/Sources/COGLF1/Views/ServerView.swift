@@ -10,9 +10,9 @@ struct RuntimeSetupControls: View {
       switch e.state {
       case .needsPython:
         Text("No Python 3.10–3.13 or uv was found. Install one, then press Check again:")
-          .font(.callout)
+          .font(.text)
         Text("brew install python@3.12   (or install uv, or Python from python.org)")
-          .font(.callout.monospaced()).textSelection(.enabled)
+          .font(.text.monospaced()).textSelection(.enabled)
         Button("Check again") { Task { await state.boot() } }
       case .needsInstall:
         Button {
@@ -23,14 +23,14 @@ struct RuntimeSetupControls: View {
         } label: { Label("Install runtime", systemImage: "arrow.down.circle.fill") }
           .buttonStyle(.borderedProminent)
         Text("Uses \(e.findUV().map { "uv (\($0))" } ?? e.findBasePython() ?? "python3") → \(EngineManager.venvDir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
-          .font(.caption).foregroundStyle(.secondary)
+          .font(.note).foregroundStyle(.secondary)
       case .installing(let msg):
-        ProgressView(value: e.installProgress) { Text(msg).font(.callout) }
-        Text(e.logs.last ?? "").font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+        ProgressView(value: e.installProgress) { Text(msg).font(.text) }
+        Text(e.logs.last ?? "").font(.note.monospaced()).foregroundStyle(.secondary).lineLimit(1)
       case .starting, .checking:
         HStack { ProgressView().controlSize(.small); Text("Starting engine…") }
       case .failed(let msg):
-        Text(msg).foregroundStyle(.red).font(.callout)
+        Text(msg).foregroundStyle(.red).font(.text)
         HStack {
           Button("Restart engine") { Task { await e.start(); await state.afterEngineStart() } }
           Button("Reinstall runtime") { Task { await e.installRuntime(); await state.afterEngineStart() } }
@@ -46,55 +46,90 @@ struct RuntimeSetupControls: View {
 
 struct ServerView: View {
   @Environment(AppState.self) private var state
-  @State private var tab = 0
+  @State private var showLog = false
 
   var body: some View {
     let e = state.engine
-    VStack(alignment: .leading, spacing: 16) {
-      HStack(alignment: .top, spacing: 18) {
-        VStack(alignment: .leading, spacing: 10) {
-          Text("Engine").font(.title2.weight(.semibold))
-          RuntimeSetupControls()
-          if e.isRunning, let h = e.health {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
-              info("Address", e.baseURL.absoluteString)
-              info("TimesFM", h.timesfmVersion ?? "?")
-              info("Python", h.python)
-              info("MLX", h.backends["mlx"].map { $0.available ? ($0.device ?? "available") : "unavailable" } ?? "—")
-              info("PyTorch", h.backends["torch"].map { $0.available ? "\($0.version ?? "") · MPS \($0.mps == true ? "yes" : "no")" : "unavailable" } ?? "—")
-              if let s = state.status {
-                info("Loaded model", s.loaded ? "\(s.modelId ?? "") (\(s.backend ?? ""))" : "none")
-                if let m = s.mlxActiveBytes { info("MLX memory", Fmt.bytes(Int64(m))) }
-                if let r = s.peakRssBytes { info("Peak RSS", Fmt.bytes(Int64(r))) }
-              }
-            }
-            .font(.callout)
-            .textSelection(.enabled)
-            HStack {
-              Button("Restart") { Task { await e.restart(); await state.afterEngineStart() } }
-              Button("Stop") { e.stop() }
-              Button("Refresh") { Task { await state.refreshStatus() } }
-              Button("Reinstall runtime…") { Task { await e.installRuntime(); await state.afterEngineStart() } }
-            }
+    Form {
+      Section {
+        HStack(spacing: Theme.space * 2) {
+          Image(systemName: statusIcon)
+            .font(.badgeIcon)
+            .foregroundStyle(statusColor)
+            .frame(width: 40)
+            .accessibilityHidden(true)
+          VStack(alignment: .leading, spacing: 2) {
+            Text(statusTitle).font(.rowTitle.weight(.semibold))
+            Text("The engine runs the model on this Mac. Nothing leaves your computer.")
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          Spacer(minLength: Theme.space)
+          if e.isRunning {
+            Button("Restart") { Task { await e.restart(); await state.afterEngineStart() } }
+            Button("Stop") { e.stop() }
           }
         }
-        .frame(maxWidth: 460, alignment: .leading)
-        Spacer()
+        .controlSize(.large)
+        .padding(.vertical, Theme.space / 2)
+        if !e.isRunning {
+          RuntimeSetupControls()
+        }
       }
 
-      Picker("", selection: $tab) {
-        Text("Local API").tag(0)
-        Text("Engine log").tag(1)
-      }
-      .pickerStyle(.segmented)
-      .labelsHidden()
-      .frame(width: 260)
+      if e.isRunning, let h = e.health {
+        Section("Now") {
+          LabeledContent("Model", value: loadedName ?? "None loaded")
+          if let s = state.status, s.loaded {
+            LabeledContent("Runs on", value: Backend(rawValue: s.backend ?? "")?.title ?? "—")
+            if let m = s.mlxActiveBytes { LabeledContent("Model memory", value: Fmt.bytes(Int64(m))) }
+          }
+          if let r = state.status?.peakRssBytes { LabeledContent("Most memory used", value: Fmt.bytes(Int64(r))) }
+        }
 
-      if tab == 0 { APIDocs(base: e.isRunning ? e.baseURL.absoluteString : "http://127.0.0.1:<port>/") }
-      else {
-        LogView(lines: e.logs)
-        HStack {
-          Spacer()
+        Section("This Mac") {
+          LabeledContent("Apple GPU", value: available(h.backends["mlx"]))
+          LabeledContent("Metal", value: h.backends["torch"]?.mps == true ? "Available" : "Not available")
+          LabeledContent("CPU", value: available(h.backends["torch"]))
+        }
+
+        Section("Versions") {
+          LabeledContent("TimesFM", value: h.timesfmVersion ?? "—")
+          LabeledContent("Python", value: h.python)
+          LabeledContent("Address") {
+            Text(e.baseURL.absoluteString).textSelection(.enabled)
+          }
+          HStack {
+            Button("Refresh") { Task { await state.refreshStatus() } }
+            Button("Reinstall…") { Task { await e.installRuntime(); await state.afterEngineStart() } }
+              .help("Download and set up the forecasting runtime again")
+            Spacer()
+          }
+        }
+      }
+
+      Section("Use it from your own code") {
+        APIDocs(base: e.isRunning ? e.baseURL.absoluteString : "http://127.0.0.1:<port>/")
+      }
+
+      Section {
+        Button {
+          withAnimation(.easeInOut(duration: 0.2)) { showLog.toggle() }
+        } label: {
+          HStack(spacing: Theme.space) {
+            Image(systemName: "chevron.right")
+              .rotationEffect(.degrees(showLog ? 90 : 0))
+              .font(.text.weight(.semibold))
+              .frame(width: 28, height: 28)
+            Text("Log")
+            Spacer(minLength: 0)
+          }
+          .contentShape(Rectangle())
+          .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        if showLog {
+          LogView(lines: e.logs).frame(height: 280)
           Button("Copy log") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(e.logs.joined(separator: "\n"), forType: .string)
@@ -102,75 +137,120 @@ struct ServerView: View {
         }
       }
     }
-    .padding(24)
-    .navigationTitle("Engine & API")
+    .formStyle(.grouped)
+    .frame(maxWidth: 860)
+    .frame(maxWidth: .infinity)
+    .navigationTitle("Engine")
     .task { await state.refreshStatus() }
   }
 
-  private func info(_ k: String, _ v: String) -> some View {
-    GridRow {
-      Text(k).foregroundStyle(.secondary)
-      Text(v)
+  private var loadedName: String? {
+    guard let s = state.status, s.loaded, let id = s.modelId else { return nil }
+    return state.models.first { $0.id == id }?.displayName ?? id
+  }
+
+  private func available(_ b: HealthInfo.Backend?) -> String {
+    b?.available == true ? "Available" : "Not available"
+  }
+
+  private var statusTitle: String {
+    switch state.engine.state {
+    case .running: return "Running"
+    case .starting, .checking: return "Starting"
+    case .installing: return "Installing"
+    case .needsInstall, .needsPython: return "Not installed"
+    case .failed: return "Something went wrong"
+    case .stopped: return "Stopped"
+    }
+  }
+
+  private var statusIcon: String {
+    switch state.engine.state {
+    case .running: return "checkmark.circle.fill"
+    case .starting, .checking, .installing: return "clock.fill"
+    case .needsInstall, .needsPython: return "arrow.down.circle.fill"
+    case .failed: return "exclamationmark.triangle.fill"
+    case .stopped: return "pause.circle.fill"
+    }
+  }
+
+  private var statusColor: Color {
+    switch state.engine.state {
+    case .running: return .green
+    case .starting, .checking, .installing: return .orange
+    case .needsInstall, .needsPython: return .accentColor
+    case .failed: return .red
+    case .stopped: return .secondary
     }
   }
 }
 
 struct APIDocs: View {
   var base: String
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        Text("While the app is open, the engine serves an HTTP API on localhost, so notebooks and scripts can use the same loaded model.")
-          .foregroundStyle(.secondary)
-        snippet("Forecast raw arrays (univariate or variates × time)", """
-        curl -s \(base)v1/forecast -H 'Content-Type: application/json' -d '{
-          "inputs": [[1,2,3,4,5,6,7,8,9,10,11,12]],
-          "horizon": 6,
-          "params": {"use_symmetric_averaging": false, "make_positive": true}
-        }'
-        """)
-        snippet("With past-only and future-known covariates", """
-        curl -s \(base)v1/forecast -H 'Content-Type: application/json' -d '{
-          "inputs": [[[10,12,13,15], [5,6,6,7]]],
-          "past_covariates": [[[20,21,19,22]]],
-          "future_covariates": [[[0,1,0,0, 1,0]]],
-          "horizon": 2
-        }'
-        """)
-        snippet("Load a model / change flags / status", """
-        curl -s \(base)load -H 'Content-Type: application/json' -d '{"model_id": "google--timesfm-3.0-pytorch", "backend": "mlx"}'
-        curl -s \(base)flags -H 'Content-Type: application/json' -d '{"overrides": {"use_linear_detrending": false}}'
-        curl -s \(base)status
-        """)
-        snippet("Python", """
-        import requests
-        r = requests.post("\(base)v1/forecast", json={"inputs": [list(range(100))], "horizon": 24})
-        out = r.json()["forecasts"][0]   # {"median": [...], "quantiles": [[P10...], ..., [P90...]]}
-        """)
-        Text("Interactive schema: \(base)docs").font(.callout)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
+  @State private var example = 0
+
+  private var examples: [(title: String, code: String)] {
+    [
+      ("Forecast", """
+      curl -s \(base)v1/forecast -H 'Content-Type: application/json' -d '{
+        "inputs": [[1,2,3,4,5,6,7,8,9,10,11,12]],
+        "horizon": 6,
+        "params": {"use_symmetric_averaging": false, "make_positive": true}
+      }'
+      """),
+      ("With helpers", """
+      curl -s \(base)v1/forecast -H 'Content-Type: application/json' -d '{
+        "inputs": [[[10,12,13,15], [5,6,6,7]]],
+        "past_covariates": [[[20,21,19,22]]],
+        "future_covariates": [[[0,1,0,0, 1,0]]],
+        "horizon": 2
+      }'
+      """),
+      ("Load a model", """
+      curl -s \(base)load -H 'Content-Type: application/json' -d '{"model_id": "google--timesfm-3.0-pytorch", "backend": "mlx"}'
+      curl -s \(base)flags -H 'Content-Type: application/json' -d '{"overrides": {"use_linear_detrending": false}}'
+      curl -s \(base)status
+      """),
+      ("Python", """
+      import requests
+      r = requests.post("\(base)v1/forecast", json={"inputs": [list(range(100))], "horizon": 24})
+      out = r.json()["forecasts"][0]   # {"median": [...], "quantiles": [[P10...], ..., [P90...]]}
+      """),
+    ]
   }
 
-  private func snippet(_ title: String, _ code: String) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
+  var body: some View {
+    VStack(alignment: .leading, spacing: Theme.space * 1.5) {
+      Text("While the app is open, scripts and notebooks on this Mac can use the loaded model.")
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
       HStack {
-        Text(title).font(.headline)
+        Picker("Example", selection: $example) {
+          ForEach(Array(examples.enumerated()), id: \.offset) { i, e in Text(e.title).tag(i) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
         Spacer()
         Button {
           NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(code, forType: .string)
-        } label: { Image(systemName: "doc.on.doc") }
-          .buttonStyle(.borderless)
+          NSPasteboard.general.setString(examples[example].code, forType: .string)
+        } label: { Label("Copy", systemImage: "doc.on.doc") }
       }
-      Text(code)
-        .font(.system(size: 12, design: .monospaced))
-        .textSelection(.enabled)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+      ScrollView(.horizontal) {
+        Text(examples[example].code)
+          .font(.code)
+          .textSelection(.enabled)
+          .padding(Theme.space * 1.5)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: Theme.shape)
+      .overlay(Theme.shape.strokeBorder(Theme.border))
+      if let url = URL(string: base + "docs") {
+        Link("Open the full reference", destination: url)
+      }
     }
+    .padding(.vertical, Theme.space / 2)
   }
 }
 
@@ -314,7 +394,7 @@ struct DataView: View {
     let size = 13 * zoom
     return VStack(alignment: .leading, spacing: Theme.space * 2) {
       HStack(spacing: Theme.space * 2) {
-        Text(state.dataset?.name ?? "").font(.title2.weight(.semibold))
+        Text(state.dataset?.name ?? "").font(.sectionTitle.weight(.semibold))
         Text("\(sheet.rows) rows").foregroundStyle(.secondary)
         Spacer()
         HStack(spacing: Theme.space) {
@@ -351,8 +431,8 @@ struct DataView: View {
       )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(.background)
-      .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(.separator))
+      .clipShape(Theme.shape)
+      .overlay(Theme.shape.strokeBorder(Theme.border))
       .gesture(
         MagnifyGesture()
           .onChanged { value in
@@ -360,7 +440,7 @@ struct DataView: View {
           }
           .onEnded { _ in zoomAnchor = zoom }
       )
-      Text("Column statistics").font(.title3.weight(.semibold))
+      Text("Column statistics").font(.rowTitle.weight(.semibold))
       SchemeBox(scheme: tableScheme) {
         Table(sheet.columns) {
           TableColumn("Column", value: \.name)
@@ -416,18 +496,18 @@ struct SettingsView: View {
         HStack {
           Button("Save token") { Keychain.set("hf_token", token) }
           Text("Only needed for gated or private repositories. Stored in your Keychain.")
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.note).foregroundStyle(.secondary)
         }
       }
       Section("Runtime") {
         TextField("Base Python for the runtime", text: $basePython, prompt: Text(state.engine.findBasePython() ?? "auto"))
         Text("Python 3.10–3.13 used to create the private environment. Leave empty to auto-detect (uv is preferred when installed).")
-          .font(.caption).foregroundStyle(.secondary)
+          .font(.note).foregroundStyle(.secondary)
         LabeledContent("Environment", value: EngineManager.venvDir.path)
       }
       Section("Storage") {
         TextField("Models folder", text: $modelsDir, prompt: Text(EngineManager.appSupport.appendingPathComponent("models").path))
-        Text("Changing the folder takes effect after restarting the engine.").font(.caption).foregroundStyle(.secondary)
+        Text("Changing the folder takes effect after restarting the engine.").font(.note).foregroundStyle(.secondary)
         Button("Restart engine now") { Task { await state.engine.restart(); await state.afterEngineStart() } }
       }
     }

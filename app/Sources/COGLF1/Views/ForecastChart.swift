@@ -1,13 +1,42 @@
+import AppKit
 import Charts
 import SwiftUI
 
 /// X values the forecast chart can use: real timestamps or step indices.
 protocol ChartX: Plottable, Comparable {
   var numeric: Double { get }
+  init(numeric: Double)
 }
 
-extension Date: ChartX { var numeric: Double { timeIntervalSince1970 } }
-extension Int: ChartX { var numeric: Double { Double(self) } }
+extension Date: ChartX {
+  var numeric: Double { timeIntervalSince1970 }
+  init(numeric: Double) { self.init(timeIntervalSince1970: numeric) }
+}
+extension Int: ChartX {
+  var numeric: Double { Double(self) }
+  init(numeric: Double) { self = Int(numeric.rounded()) }
+}
+
+/// Two-finger swipes and the mouse wheel. SwiftUI has no scroll event, and the hover layer
+/// on top of the chart keeps them from reaching the chart's own scrolling.
+private final class ScrollWheelMonitor {
+  var onScroll: ((NSEvent) -> Bool)?
+  private var token: Any?
+
+  func start() {
+    guard token == nil else { return }
+    token = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+      self?.onScroll?(event) == true ? nil : event
+    }
+  }
+
+  func stop() {
+    if let token { NSEvent.removeMonitor(token) }
+    token = nil
+  }
+
+  deinit { stop() }
+}
 
 /// Which quantile bands to shade. Pairs of quantile indices into the 9-quantile output.
 enum Band: Int, CaseIterable, Identifiable {
@@ -32,13 +61,15 @@ struct ForecastChart: View {
   var display: ChartDisplay
   var horizon: Int
   var zoom: Binding<Double> = .constant(1)
+  /// Scrollable charts hold the whole history and open on the latest stretch. Off for image export.
+  var scrollable = true
 
   var body: some View {
     let useDates = target.history.time != nil && windows.allSatisfy { $0.time != nil }
     if useDates {
-      SeriesChart<Date>(model: build { t, _ in t.flatMap(Fmt.date) }, display: display, zoom: zoom)
+      SeriesChart<Date>(model: build { t, _ in t.flatMap(Fmt.date) }, display: display, scrollable: scrollable, zoom: zoom)
     } else {
-      SeriesChart<Int>(model: build { _, i in i }, display: display, zoom: zoom)
+      SeriesChart<Int>(model: build { _, i in i }, display: display, scrollable: scrollable, zoom: zoom)
     }
   }
 
@@ -50,16 +81,21 @@ struct ForecastChart: View {
     let auto = max(horizon * 4, 120) + heldOut
     let keep = display.historyPoints > 0 ? display.historyPoints : auto
     let start = max(0, n - keep)
-    var hist: [(X, Double)] = []
-    for i in start..<n {
-      guard let v = h.value[i], let x = xOf(h.time?[i], h.index[i]) else { continue }
-      hist.append((x, v))
+    func points(_ range: Range<Int>) -> [(X, Double)] {
+      var out: [(X, Double)] = []
+      for i in range {
+        guard let v = h.value[i], let x = xOf(h.time?[i], h.index[i]) else { continue }
+        out.append((x, v))
+      }
+      // Downsample very long histories for drawing speed.
+      if out.count > 3000 {
+        let step = Double(out.count) / 3000
+        out = stride(from: 0.0, to: Double(out.count), by: step).map { out[Int($0)] }
+      }
+      return out
     }
-    // Downsample very long histories for drawing speed.
-    if hist.count > 3000 {
-      let step = Double(hist.count) / 3000
-      hist = stride(from: 0.0, to: Double(hist.count), by: step).map { hist[Int($0)] }
-    }
+    let recent = points(start..<n)
+    let hist = scrollable ? points(0..<start) + recent : recent
     let ws: [WindowModel<X>] = windows.map { w in
       var pts: [WindowModel<X>.Step] = []
       for i in w.index.indices {
@@ -72,7 +108,7 @@ struct ForecastChart: View {
       if let pos = h.index.firstIndex(of: ci), let v = h.value[pos], let x = xOf(h.time?[pos], ci) { anchor = (x, v) }
       return WindowModel(window: w.window, steps: pts, anchor: anchor)
     }
-    return SeriesModel(history: hist, windows: ws)
+    return SeriesModel(history: hist, windows: ws, openAt: recent.first?.0)
   }
 }
 
@@ -91,19 +127,72 @@ struct WindowModel<X: ChartX> {
 struct SeriesModel<X: ChartX> {
   var history: [(X, Double)]
   var windows: [WindowModel<X>]
+  /// Left edge of the stretch shown at 100%. Older history sits to the left of it.
+  var openAt: X?
 }
 
 private struct SeriesChart<X: ChartX>: View {
   var model: SeriesModel<X>
   var display: ChartDisplay
+  var scrollable: Bool
   @Binding var zoom: Double
   @State private var hoverX: X?
   @State private var hoverPoint: CGPoint?
   @State private var zoomAnchor: Double = 1
+  /// Left edge of what is on screen. Nil until the chart is moved, so it opens on the latest stretch.
+  @State private var scrollX: X?
+  @State private var dragOrigin: Double?
+  @State private var plotWidth: CGFloat = 1
+  @State private var wheel = ScrollWheelMonitor()
 
   var body: some View {
+    if let openAt = model.openAt ?? allXs.first {
+      chart(openAt: openAt)
+        .onChange(of: model.openAt?.numeric) { _, _ in scrollX = nil }
+        .onChange(of: zoom) { old, new in keepRightEdge(from: old, to: new, openAt: openAt) }
+        .onAppear {
+          guard scrollable else { return }
+          wheel.onScroll = { event in
+            guard hoverPoint != nil else { return false }
+            let dx = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY) ? event.scrollingDeltaX : event.scrollingDeltaY
+            let points = event.hasPreciseScrollingDeltas ? dx : dx * 10
+            move(from: (scrollX ?? openAt).numeric, by: points)
+            return true
+          }
+          wheel.start()
+        }
+        .onDisappear { wheel.stop() }
+    }
+  }
+
+  /// Moves the view by a distance in screen points. Content follows the pointer or fingers.
+  private func move(from origin: Double, by points: CGFloat) {
+    guard let range = scrollRange else { return }
+    // The plot frame is the whole scrollable strip, so it maps to the whole x range.
+    let values = allXs.map(\.numeric)
+    let span = (values.max() ?? 0) - (values.min() ?? 0)
+    let shifted = origin - Double(points) / Double(max(plotWidth, 1)) * span
+    scrollX = X(numeric: min(max(shifted, range.lowerBound), range.upperBound))
+  }
+
+  /// Zooming keeps the newest data in place instead of the oldest.
+  private func keepRightEdge(from old: Double, to new: Double, openAt: X) {
+    guard let range = scrollRange, old > 0, new > 0 else { return }
+    let span = Double(visibleLength) * new
+    let right = (scrollX ?? openAt).numeric + span / old
+    scrollX = X(numeric: min(max(right - span / new, range.lowerBound), range.upperBound))
+  }
+
+  /// Allowed positions of the left edge.
+  private var scrollRange: ClosedRange<Double>? {
+    let values = allXs.map(\.numeric)
+    guard let lo = values.min(), let hi = values.max(), hi > lo else { return nil }
+    return lo...max(lo, hi - Double(visibleLength))
+  }
+
+  private func chart(openAt: X) -> some View {
     let length = visibleLength
-    Chart {
+    return Chart {
       historyMarks
       ForEach(model.windows, id: \.window) { w in
         windowMarks(w)
@@ -113,8 +202,9 @@ private struct SeriesChart<X: ChartX>: View {
     .chartYScale(domain: .automatic(includesZero: false))
     .chartXAxis { AxisMarks(values: .automatic(desiredCount: 6)) }
     .chartLegend(.hidden)
-    .chartScrollableAxes(zoom > 1.05 ? .horizontal : [])
+    .chartScrollableAxes(scrollable ? .horizontal : [])
     .chartXVisibleDomain(length: length)
+    .chartScrollPosition(x: Binding(get: { scrollX ?? openAt }, set: { scrollX = $0 }))
     .chartOverlay { proxy in
       GeometryReader { geo in
         Rectangle().fill(.clear).contentShape(Rectangle())
@@ -123,6 +213,7 @@ private struct SeriesChart<X: ChartX>: View {
             case .active(let loc):
               hoverPoint = loc
               guard let plot = proxy.plotFrame else { return }
+              plotWidth = geo[plot].width
               let x = loc.x - geo[plot].origin.x
               if let v: X = proxy.value(atX: x, as: X.self) { hoverX = nearest(to: v) }
             case .ended:
@@ -137,6 +228,22 @@ private struct SeriesChart<X: ChartX>: View {
               }
               .onEnded { _ in zoomAnchor = zoom }
           )
+          .gesture(
+            DragGesture(minimumDistance: 2)
+              .onChanged { value in
+                guard scrollable else { return }
+                if dragOrigin == nil {
+                  dragOrigin = (scrollX ?? openAt).numeric
+                  hoverX = nil
+                  NSCursor.closedHand.push()
+                }
+                move(from: dragOrigin ?? 0, by: value.translation.width)
+              }
+              .onEnded { _ in
+                if dragOrigin != nil { NSCursor.pop() }
+                dragOrigin = nil
+              }
+          )
         if let hoverX, let hoverPoint {
           tooltip(at: hoverX)
             .fixedSize()
@@ -150,15 +257,20 @@ private struct SeriesChart<X: ChartX>: View {
   /// How much of the x axis stays on screen. Dates are seconds; steps are counts.
   private var visibleLength: Int {
     let values = allXs.map(\.numeric)
-    guard let lo = values.min(), let hi = values.max(), hi > lo else { return 1 }
+    guard let first = values.min(), let hi = values.max(), hi > first else { return 1 }
+    let lo = min(max(model.openAt?.numeric ?? first, first), hi - 1)
     return max(1, Int(((hi - lo) / zoom).rounded()))
   }
+
+  /// Smooth curve that still passes through every point and never overshoots them.
+  private static var curve: InterpolationMethod { .monotone }
 
   @ChartContentBuilder private var historyMarks: some ChartContent {
     ForEach(Array(model.history.enumerated()), id: \.offset) { _, p in
       LineMark(x: .value("Time", p.0), y: .value("Value", p.1), series: .value("Series", "History"))
         .foregroundStyle(Color.primary.opacity(0.75))
         .lineStyle(StrokeStyle(lineWidth: 1.4))
+        .interpolationMethod(Self.curve)
     }
     if display.showPoints {
       ForEach(Array(model.history.enumerated()), id: \.offset) { _, p in
@@ -174,15 +286,18 @@ private struct SeriesChart<X: ChartX>: View {
     ForEach(Band.allCases.filter { display.bands.contains($0) }) { band in
       bandMarks(w, band: band, fade: fade)
     }
+    // The forecast grows out of the last observed point, so it doesn't float.
     if let a = w.anchor {
       LineMark(x: .value("Time", a.0), y: .value("Value", a.1), series: .value("Series", "F\(w.window)"))
         .foregroundStyle(Color.accentColor.opacity(fade))
         .lineStyle(StrokeStyle(lineWidth: 2))
+        .interpolationMethod(Self.curve)
     }
     ForEach(Array(w.steps.enumerated()), id: \.offset) { _, s in
       LineMark(x: .value("Time", s.x), y: .value("Value", s.median), series: .value("Series", "F\(w.window)"))
         .foregroundStyle(Color.accentColor.opacity(fade))
         .lineStyle(StrokeStyle(lineWidth: 2))
+        .interpolationMethod(Self.curve)
     }
     if display.showActuals {
       actualMarks(w)
@@ -197,6 +312,15 @@ private struct SeriesChart<X: ChartX>: View {
   @ChartContentBuilder private func bandMarks(_ w: WindowModel<X>, band: Band, fade: Double) -> some ChartContent {
     let key = "b\(band.rawValue)-w\(w.window)"
     let style = Color.accentColor.opacity(band.opacity * fade)
+    if let a = w.anchor {
+      AreaMark(
+        x: .value("Time", a.0),
+        yStart: .value("Low", a.1),
+        yEnd: .value("High", a.1),
+        series: .value("Band", key))
+        .foregroundStyle(style)
+        .interpolationMethod(Self.curve)
+    }
     ForEach(Array(w.steps.enumerated()), id: \.offset) { _, s in
       AreaMark(
         x: .value("Time", s.x),
@@ -204,6 +328,7 @@ private struct SeriesChart<X: ChartX>: View {
         yEnd: .value("High", s.q[band.upper]),
         series: .value("Band", key))
         .foregroundStyle(style)
+        .interpolationMethod(Self.curve)
     }
   }
 
@@ -213,6 +338,7 @@ private struct SeriesChart<X: ChartX>: View {
       LineMark(x: .value("Time", p.0), y: .value("Value", p.1), series: .value("Series", "A\(w.window)"))
         .foregroundStyle(Color.green)
         .lineStyle(StrokeStyle(lineWidth: 1.4, dash: [4, 3]))
+        .interpolationMethod(Self.curve)
       PointMark(x: .value("Time", p.0), y: .value("Value", p.1))
         .symbolSize(14)
         .foregroundStyle(Color.green)
@@ -242,27 +368,27 @@ private struct SeriesChart<X: ChartX>: View {
   @ViewBuilder private func tooltip(at x: X) -> some View {
     let hist = model.history.first { $0.0 == x }?.1
     let steps = model.windows.compactMap { w in w.steps.first { $0.x == x }.map { (w.window, $0) } }
-    VStack(alignment: .leading, spacing: 3) {
-      Text(label(x)).font(.caption.weight(.semibold))
+    VStack(alignment: .leading, spacing: 4) {
+      Text(label(x)).font(.note.weight(.semibold))
       if let hist { row("Observed", hist, .primary) }
       ForEach(steps, id: \.0) { w, s in
-        if steps.count > 1 { Text("Window \(w + 1)").font(.caption2).foregroundStyle(.secondary) }
+        if steps.count > 1 { Text("Window \(w + 1)").font(.note).foregroundStyle(.secondary) }
         row("Median", s.median, .accentColor)
         row("P10 – P90", nil, .secondary, text: "\(Fmt.number(s.q[0])) – \(Fmt.number(s.q[8]))")
         if let a = s.actual { row("Actual", a, .green) }
       }
     }
     .padding(8)
-    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    .background(.regularMaterial, in: Theme.shape)
     .shadow(radius: 2)
   }
 
   private func row(_ name: String, _ v: Double?, _ c: Color, text: String? = nil) -> some View {
-    HStack(spacing: 6) {
+    HStack(spacing: 8) {
       Circle().fill(c).frame(width: 6, height: 6)
-      Text(name).font(.caption2).foregroundStyle(.secondary)
+      Text(name).font(.note).foregroundStyle(.secondary)
       Spacer(minLength: 10)
-      Text(text ?? Fmt.number(v)).font(.caption.monospacedDigit())
+      Text(text ?? Fmt.number(v)).font(.note.monospacedDigit())
     }
     .frame(minWidth: 170)
   }

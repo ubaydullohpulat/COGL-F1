@@ -116,17 +116,28 @@ struct LocalModel: Decodable, Identifiable, Hashable {
   var sizeBytes: Int64
   var kind: String
   var source: String?
-  var displayName: String
+  var storedName: String
   var meta: [String: JSONValue]
   var architecture: Architecture
   var flags: [String: JSONValue]
 
   var isFinetuned: Bool { kind == "finetuned" }
 
+  /// Fine-tunes saved without a name get "<base id>-ft-<date>-<time>" from the engine. Show that as words.
+  var displayName: String {
+    guard isFinetuned, storedName == id, let mark = id.range(of: "-ft-", options: .backwards) else { return storedName }
+    let parts = id[mark.upperBound...].split(separator: "-")
+    guard parts.count >= 2, parts[0].count == 8, parts[1].count == 4,
+          let date = Int(parts[0]), let time = Int(parts[1]) else { return storedName }
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    let month = months[max(1, min(12, date / 100 % 100)) - 1]
+    return "Fine-tuned · \(date % 100) \(month) \(date / 10000), " + String(format: "%02d:%02d", time / 100, time % 100)
+  }
+
   enum CodingKeys: String, CodingKey {
     case id, path, kind, source, meta, architecture, flags
     case sizeBytes = "size_bytes"
-    case displayName = "display_name"
+    case storedName = "display_name"
   }
 }
 

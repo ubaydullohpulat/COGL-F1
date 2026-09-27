@@ -9,12 +9,15 @@ struct RootView: View {
       List(selection: $state.section) {
         Section {
           ForEach(SidebarSection.allCases) { s in
-            Label {
-              Text(s.title).font(.title3)
-            } icon: {
-              Image(systemName: s.icon).font(.title3)
+            // A plain row, because the sidebar resizes a Label to the compact system size.
+            HStack(spacing: Theme.space * 1.5) {
+              Image(systemName: s.icon)
+                .font(.sectionTitle.weight(.medium))
+                .frame(width: 26, height: 26)
+              Text(s.title).font(.rowTitle)
+              Spacer(minLength: 0)
             }
-            .padding(.vertical, Theme.space)
+            .frame(minHeight: 36)
             .badge(badge(for: s))
             .tag(s)
           }
@@ -22,7 +25,7 @@ struct RootView: View {
       }
       .environment(\.defaultMinListRowHeight, 48)
       .navigationSplitViewColumnWidth(min: 220, ideal: 248, max: 300)
-      .safeAreaInset(edge: .bottom) { EngineFooter().padding(10) }
+      .safeAreaInset(edge: .bottom) { EngineFooter().padding(8) }
     } detail: {
       Group {
         switch state.section {
@@ -34,7 +37,24 @@ struct RootView: View {
         }
       }
       .toolbar {
-        ToolbarItem(placement: .principal) { ModelBar() }
+        // The toolbar centers this over the data column too; push it over the page content.
+        if #available(macOS 26.0, *) {
+          // The system bubble would stretch over the padding, so the bar draws its own.
+          ToolbarItem(placement: .principal) {
+            ModelBar()
+              // Room around the buttons, so their hover shape doesn't touch the edge.
+              .controlSize(.small)
+              .font(.text)
+              .padding(.vertical, 4)
+              .glassEffect(.regular, in: Capsule())
+              .padding(.leading, dataColumnShown ? DataPanel.width : 0)
+          }
+          .sharedBackgroundVisibility(.hidden)
+        } else {
+          ToolbarItem(placement: .principal) {
+            ModelBar().padding(.leading, dataColumnShown ? DataPanel.width : 0)
+          }
+        }
       }
     }
     .alert("Something went wrong", isPresented: Binding(get: { state.alert != nil }, set: { if !$0 { state.alert = nil } })) {
@@ -55,6 +75,14 @@ struct RootView: View {
     }
   }
 
+  private var dataColumnShown: Bool {
+    switch state.section {
+    case .forecast: return state.dataset != nil
+    case .finetune: return true
+    default: return false
+    }
+  }
+
   private func badge(for s: SidebarSection) -> Text? {
     switch s {
     case .models where !state.hasModel: return Text("!")
@@ -69,20 +97,28 @@ struct EngineFooter: View {
   @Environment(AppState.self) private var state
 
   var body: some View {
-    HStack(spacing: 8) {
-      Circle().fill(color).frame(width: 8, height: 8)
-      VStack(alignment: .leading, spacing: 1) {
-        Text(title).font(.caption.weight(.medium))
-        if let s = state.status, s.loaded, let id = s.modelId {
-          Text(state.models.first { $0.id == id }?.displayName ?? id)
-            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+    Button {
+      state.section = .server
+    } label: {
+      HStack(spacing: Theme.space * 1.5) {
+        Circle().fill(color).frame(width: 9, height: 9)
+          .frame(width: 26)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title).font(.text.weight(.medium))
+          if let s = state.status, s.loaded, let id = s.modelId {
+            Text(state.models.first { $0.id == id }?.displayName ?? id)
+              .font(.note).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+          }
         }
+        Spacer(minLength: 0)
       }
-      Spacer()
+      .padding(.horizontal, Theme.space).padding(.vertical, Theme.space)
+      .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+      .background(Theme.fill, in: Theme.shape)
+      .contentShape(Theme.shape)
     }
-    .padding(8)
-    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-    .onTapGesture { state.section = .server }
+    .buttonStyle(.plain)
+    .help("Open the engine page")
   }
 
   private var title: String {

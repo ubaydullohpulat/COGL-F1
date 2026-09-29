@@ -1,10 +1,17 @@
 import AppKit
 import SwiftUI
 
+/// Where a view is in its window: its middle, its width, and the width of the window.
+struct WindowSpan: Equatable {
+  var midX: CGFloat
+  var width: CGFloat
+  var window: CGFloat
+}
+
 /// Reports the horizontal middle of the view it is behind, in window coordinates.
 /// The toolbar and the page are separate hosting views, so SwiftUI's own coordinate spaces can't compare them.
 struct WindowMidX: NSViewRepresentable {
-  var report: (CGFloat) -> Void
+  var report: (WindowSpan) -> Void
 
   func makeNSView(context: Context) -> Probe {
     let view = Probe()
@@ -18,8 +25,8 @@ struct WindowMidX: NSViewRepresentable {
   }
 
   final class Probe: NSView {
-    var report: ((CGFloat) -> Void)?
-    private var last: CGFloat?
+    var report: ((WindowSpan) -> Void)?
+    private var last: WindowSpan?
     private var observer: NSObjectProtocol?
 
     override func layout() {
@@ -50,11 +57,12 @@ struct WindowMidX: NSViewRepresentable {
     }
 
     private func send() {
-      guard window != nil else { return }
-      let x = convert(bounds, to: nil).midX.rounded()
-      guard x != last else { return }
-      last = x
-      report?(x)
+      guard let window else { return }
+      let rect = convert(bounds, to: nil)
+      let span = WindowSpan(midX: rect.midX.rounded(), width: rect.width.rounded(), window: window.frame.width)
+      guard span != last else { return }
+      last = span
+      report?(span)
     }
   }
 }
@@ -79,7 +87,7 @@ private struct ModelBarCenter: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .background(WindowMidX { midX = $0 })
+      .background(WindowMidX { midX = $0.midX })
       .preference(key: PageCenterKey.self, value: midX)
   }
 }
@@ -90,13 +98,21 @@ struct CenteredOver<Content: View>: View {
   var target: CGFloat?
   @ViewBuilder var content: () -> Content
   /// Where the toolbar put the item, before the shift.
-  @State private var own: CGFloat?
+  @State private var own: WindowSpan?
+  /// Room kept free at the window's right edge for the page's own toolbar button.
+  private let trailingRoom: CGFloat = 64
 
   var body: some View {
-    let shift = target.flatMap { t in own.map { t - $0 } } ?? 0
     content()
       .offset(x: shift)
       .background(WindowMidX { own = $0 })
+  }
+
+  /// As far towards `target` as the item can go without running out of the window.
+  private var shift: CGFloat {
+    guard let target, let own else { return 0 }
+    let furthest = own.window - trailingRoom - own.width / 2 - own.midX
+    return min(target - own.midX, max(0, furthest))
   }
 }
 

@@ -8,3 +8,4 @@ dist/
 build/
 *.xcodeproj/xcuserdata/
 engine/tests/_out/
+marketing/

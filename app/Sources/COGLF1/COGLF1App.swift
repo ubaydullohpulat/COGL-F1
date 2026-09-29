@@ -7,7 +7,7 @@ struct COGLF1App: App {
   @State private var state = AppState()
 
   var body: some Scene {
-    Window("COGL-F1", id: "main") {
+    Window("Forecast Studio", id: "main") {
       RootView()
         .environment(state)
         .frame(minWidth: 1180, minHeight: 740)

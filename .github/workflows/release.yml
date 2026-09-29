@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" \
-            "dist/COGL-F1-${VERSION}.dmg" \
-            "dist/COGL-F1-${VERSION}.dmg.sha256" \
+            "dist/Forecast-Studio-${VERSION}.dmg" \
+            "dist/Forecast-Studio-${VERSION}.dmg.sha256" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes

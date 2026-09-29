@@ -3,6 +3,8 @@ import SwiftUI
 
 struct RuntimeSetupControls: View {
   @Environment(AppState.self) private var state
+  /// The line that says which Python is used and where. The welcome page leaves it out.
+  var showsDetails = true
 
   var body: some View {
     let e = state.engine
@@ -22,8 +24,11 @@ struct RuntimeSetupControls: View {
           }
         } label: { Label("Install runtime", systemImage: "arrow.down.circle.fill") }
           .buttonStyle(.borderedProminent)
-        Text("Uses \(e.findUV().map { "uv (\($0))" } ?? e.findBasePython() ?? "python3") → \(EngineManager.venvDir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
-          .font(.note).foregroundStyle(.secondary)
+          .controlSize(.large)
+        if showsDetails {
+          Text("Uses \(e.findUV().map { "uv (\($0))" } ?? e.findBasePython() ?? "python3") → \(EngineManager.venvDir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
+            .font(.note).foregroundStyle(.secondary)
+        }
       case .installing(let msg):
         ProgressView(value: e.installProgress) { Text(msg).font(.text) }
         Text(e.logs.last ?? "").font(.note.monospaced()).foregroundStyle(.secondary).lineLimit(1)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Builds dist/COGL-F1.app and optionally a signed disk image.
+# Builds dist/Forecast Studio.app and optionally a signed disk image.
 #   scripts/build_app.sh          # release build of the app bundle
-#   scripts/build_app.sh --dmg    # also create dist/COGL-F1-<version>.dmg
+#   scripts/build_app.sh --dmg    # also create dist/Forecast-Studio-<version>.dmg
 #
 # Signing: SIGN_IDENTITY picks the certificate. By default the first "Developer ID Application"
 # identity is used, else "Apple Development", else an ad-hoc signature.
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/dist/COGL-F1.app"
+APP="$ROOT/dist/Forecast Studio.app"
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$ROOT/engine/coglf1_engine/__init__.py")"
 
 if [[ -z "${SIGN_IDENTITY:-}" ]]; then
@@ -27,7 +27,7 @@ BIN="$ROOT/app/.build/release/COGLF1"
 echo "==> Assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/engine" "$APP/Contents/Resources/samples"
-cp "$BIN" "$APP/Contents/MacOS/COGL-F1"
+cp "$BIN" "$APP/Contents/MacOS/Forecast Studio"
 rsync -a --exclude '__pycache__' --exclude '*.pyc' "$ROOT/engine/coglf1_engine" "$APP/Contents/Resources/engine/"
 cp "$ROOT/engine/requirements.txt" "$APP/Contents/Resources/engine/"
 cp "$ROOT"/samples/*.csv "$ROOT"/samples/*.xlsx "$APP/Contents/Resources/samples/"
@@ -43,10 +43,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>COGL-F1</string>
-  <key>CFBundleDisplayName</key><string>COGL-F1</string>
+  <key>CFBundleName</key><string>Forecast Studio</string>
+  <key>CFBundleDisplayName</key><string>Forecast Studio</string>
   <key>CFBundleIdentifier</key><string>com.cogl.f1</string>
-  <key>CFBundleExecutable</key><string>COGL-F1</string>
+  <key>CFBundleExecutable</key><string>Forecast Studio</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
@@ -72,13 +72,13 @@ fi
 codesign --verify --strict --verbose=2 "$APP"
 
 if [[ "${1:-}" == "--dmg" ]]; then
-  DMG="$ROOT/dist/COGL-F1-${VERSION}.dmg"
+  DMG="$ROOT/dist/Forecast-Studio-${VERSION}.dmg"
   echo "==> Creating $DMG"
   STAGE="$(mktemp -d)"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
   rm -f "$DMG"
-  hdiutil create -volname "COGL-F1 ${VERSION}" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+  hdiutil create -volname "Forecast Studio ${VERSION}" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
   if [[ "$SIGN_IDENTITY" != "-" ]]; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
   fi

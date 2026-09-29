@@ -1,4 +1,4 @@
-# COGL-F1
+# Forecast Studio
 
 macOS app for local time-series forecasting. SwiftUI client in `app/`, Python engine in `engine/`. Minimum system is macOS 14. Apple Silicon.
 
@@ -12,4 +12,4 @@ Shared pieces live in `app/Sources/COGLF1/Views/Theme.swift`: spacing, the five 
 
 ## Release
 
-`__version__` in `engine/coglf1_engine/__init__.py` must match the git tag. Pushing `v0.1.2` builds and notarizes `dist/COGL-F1-0.1.2.dmg` via `.github/workflows/release.yml`.
+`__version__` in `engine/coglf1_engine/__init__.py` must match the git tag. Pushing `v0.1.2` builds and notarizes `dist/Forecast-Studio-0.1.2.dmg` via `.github/workflows/release.yml`.

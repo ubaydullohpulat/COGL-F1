@@ -1,11 +1,11 @@
 ---
 name: macos-ui
 description: >-
-  UI rules for the COGL-F1 macOS app. Use when changing SwiftUI, layout,
+  UI rules for the Forecast Studio macOS app. Use when changing SwiftUI, layout,
   copy, charts, tables, the sidebar, empty states, or visual design.
 ---
 
-# COGL-F1 macOS UI
+# Forecast Studio macOS UI
 
 Native macOS. Do not port a web design system (shadcn, Cornflower, Column, or similar) into SwiftUI. Custom-drawn controls are what this app is trying to avoid.
 

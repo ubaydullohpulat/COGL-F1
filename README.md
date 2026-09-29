@@ -1,6 +1,6 @@
-# COGL-F1
+# Forecast Studio
 
-COGL-F1 is a desktop app for local time-series forecasting. Powered by Google's TimesFM-3, it gives zero-shot multivariate forecasts with covariates and P10–P90 uncertainty bands. Drop in a CSV or Excel file, pick targets and a horizon, and forecast offline. No training, no cloud, data stays local.
+Forecast Studio is a desktop app for local time-series forecasting. Powered by Google's TimesFM-3, it gives zero-shot multivariate forecasts with covariates and P10–P90 uncertainty bands. Drop in a CSV or Excel file, pick targets and a horizon, and forecast offline. No training, no cloud, data stays local.
 
 Think LM Studio, but for forecasting: download the model with one button, load it, and play with every flag.
 
@@ -26,8 +26,8 @@ Think LM Studio, but for forecasting: download the model with one button, load i
 Requirements: Apple Silicon Mac, macOS 14+, and Python 3.10–3.13 (`brew install python@3.12`) or [uv](https://docs.astral.sh/uv/).
 
 ```bash
-scripts/build_app.sh            # → dist/COGL-F1.app  (add --dmg for a disk image)
-open dist/COGL-F1.app
+scripts/build_app.sh            # → dist/Forecast Studio.app  (add --dmg for a disk image)
+open "dist/Forecast Studio.app"
 ```
 
 On first launch:

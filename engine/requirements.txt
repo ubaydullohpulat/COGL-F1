@@ -1,4 +1,4 @@
-# COGL-F1 engine runtime. Installed by the app into its private venv on first launch.
+# Forecast Studio engine runtime. Installed by the app into its private venv on first launch.
 timesfm[mlx,torch]==3.0.2
 numpy>=1.26
 pandas>=2.2

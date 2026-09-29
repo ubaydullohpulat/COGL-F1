@@ -46,7 +46,7 @@ def main() -> None:
   from .server import create_app
 
   app = create_app(os.path.expanduser(args.models_dir))
-  print(f"COGL-F1 engine listening on http://{args.host}:{args.port}", flush=True)
+  print(f"Forecast Studio engine listening on http://{args.host}:{args.port}", flush=True)
   uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

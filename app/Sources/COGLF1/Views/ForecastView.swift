@@ -701,40 +701,99 @@ enum Samples {
 struct SetupChecklist: View {
   @Environment(AppState.self) private var state
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text("Welcome to COGL-F1").font(.pageTitle.weight(.semibold))
-      Text("Zero-shot forecasting with Google's TimesFM 3, running locally on your Mac.")
+    // The first step that is not done yet is the one with the button.
+    let current = !state.engine.isRunning ? 1 : (!state.hasModel ? 2 : 3)
+    VStack(spacing: Theme.space * 3) {
+      VStack(spacing: Theme.space) {
+        Image(systemName: "chart.line.uptrend.xyaxis")
+          .font(.heroIcon)
+          .foregroundStyle(Color.accentColor)
+          .padding(.bottom, Theme.space)
+          .accessibilityHidden(true)
+        Text("Welcome to Forecast Studio").font(.pageTitle.weight(.semibold))
+        Text("Two short downloads, then you can forecast from your own data.")
+          .font(.text)
+          .foregroundStyle(.secondary)
+      }
+      VStack(spacing: 0) {
+        SetupStep(number: 1, current: current, title: "Set up forecasting", detail: "One time, about 1 GB.") {
+          RuntimeSetupControls(showsDetails: false)
+        }
+        Divider().padding(.leading, SetupStep<EmptyView>.textInset)
+        SetupStep(number: 2, current: current, title: "Download the model", detail: "About 1.3 GB. It stays on this Mac.") {
+          Button("Go to Models") { state.section = .models }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+        Divider().padding(.leading, SetupStep<EmptyView>.textInset)
+        SetupStep(number: 3, current: current, title: "Open your data", detail: "A CSV or Excel file.") { EmptyView() }
+      }
+      .background(Theme.fill, in: Theme.shape)
+      Label("Everything runs on this Mac. Your data never leaves it.", systemImage: "lock.fill")
+        .font(.note)
         .foregroundStyle(.secondary)
-      step(1, "Install the forecasting runtime", done: state.engine.isRunning,
-           detail: "Python environment with TimesFM 3, MLX and PyTorch (one-time, ≈ 1 GB).") {
-        RuntimeSetupControls()
-      }
-      step(2, "Download the TimesFM 3 model", done: state.hasModel,
-           detail: "330M parameters · 1.32 GB from Hugging Face (google/timesfm-3.0-pytorch).") {
-        Button("Go to Models") { state.section = .models }.buttonStyle(.borderedProminent)
-      }
-      step(3, "Open your data and forecast", done: false, detail: "CSV or Excel, then press Run.") { EmptyView() }
     }
-    .frame(maxWidth: 620)
-    .padding(32)
+    .frame(maxWidth: 560)
+    .padding(Theme.space * 3)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
+}
 
-  private func step<C: View>(_ n: Int, _ title: String, done: Bool, detail: String, @ViewBuilder action: () -> C) -> some View {
-    HStack(alignment: .top, spacing: 16) {
+/// One row of the setup list: a numbered badge, what the step is, and its button while it is the current one.
+private struct SetupStep<Action: View>: View {
+  var number: Int
+  var current: Int
+  var title: String
+  var detail: String
+  @ViewBuilder var action: () -> Action
+
+  private static var badge: CGFloat { 28 }
+  /// Where the text starts, so the dividers line up with it.
+  static var textInset: CGFloat { Theme.space * 2 + badge + Theme.space * 1.5 }
+
+  private var done: Bool { number < current }
+  private var isCurrent: Bool { number == current }
+
+  var body: some View {
+    HStack(alignment: .top, spacing: Theme.space * 1.5) {
       ZStack {
-        Circle().fill(done ? Color.green : Color.accentColor.opacity(0.15)).frame(width: 30, height: 30)
-        if done { Image(systemName: "checkmark").foregroundStyle(.white).font(.text.bold()) }
-        else { Text("\(n)").font(.text.bold()).foregroundStyle(.tint) }
+        if done {
+          Circle().fill(Color.green)
+          Image(systemName: "checkmark").font(.text.bold()).foregroundStyle(.white)
+        } else if isCurrent {
+          Circle().fill(Color.accentColor)
+          Text("\(number)").font(.text.bold()).foregroundStyle(.white)
+        } else {
+          Circle().fill(.quaternary)
+          Text("\(number)").font(.text.weight(.semibold)).foregroundStyle(.secondary)
+        }
       }
-      VStack(alignment: .leading, spacing: 8) {
-        Text(title).font(.text.weight(.semibold))
-        Text(detail).font(.text).foregroundStyle(.secondary)
-        if !done { action() }
+      .frame(width: Self.badge, height: Self.badge)
+      .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: Theme.space / 2) {
+        Text(title)
+          .font(.rowTitle.weight(.semibold))
+          .foregroundStyle(done || isCurrent ? .primary : .secondary)
+        if !done {
+          Text(detail).font(.text).foregroundStyle(.secondary)
+        }
+        if isCurrent {
+          action().padding(.top, Theme.space)
+        }
       }
-      Spacer()
+      // Centre a one-line row on its badge.
+      .frame(minHeight: Self.badge, alignment: .center)
+      Spacer(minLength: 0)
     }
-    .padding(16)
-    .background(Theme.fill, in: Theme.shape)
+    .padding(Theme.space * 2)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("Step \(number), \(title)\(done ? ", done" : "")")
   }
+}
+
+#Preview("Setup") {
+  SetupChecklist()
+    .environment(AppState())
+    .frame(width: 980, height: 680)
 }

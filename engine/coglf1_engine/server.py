@@ -1,4 +1,4 @@
-"""Local HTTP API of the COGL-F1 engine. The macOS app is a client of this server; so can be scripts."""
+"""Local HTTP API of the Forecast Studio engine. The macOS app is a client of this server; so can be scripts."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ class FinetuneRequest(BaseModel):
 
 def create_app(models_dir: str) -> FastAPI:
   os.makedirs(models_dir, exist_ok=True)
-  app = FastAPI(title="COGL-F1 Engine", version=__version__)
+  app = FastAPI(title="Forecast Studio Engine", version=__version__)
   runtime = rt.Runtime(models_dir)
   datasets = data_lib.DatasetStore()
   jobs = JobRegistry()

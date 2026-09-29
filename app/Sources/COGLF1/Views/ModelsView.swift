@@ -136,7 +136,7 @@ struct CatalogSection: View {
         }
       }
       if !catalog.results.isEmpty {
-        Text("These are uploaded by other people. COGL-F1 checks that a model can run, not who made it or how good it is.")
+        Text("These are uploaded by other people. Forecast Studio checks that a model can run, not who made it or how good it is.")
           .font(.note).foregroundStyle(.secondary)
       }
     }

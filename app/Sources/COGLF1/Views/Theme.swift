@@ -11,6 +11,18 @@ enum Theme {
   static let border = AnyShapeStyle(.separator)
 }
 
+/// Width left for a page, next to the sidebar. Pages fold their side panels when it gets narrow.
+private struct PageWidthKey: EnvironmentKey {
+  static let defaultValue: CGFloat = .infinity
+}
+
+extension EnvironmentValues {
+  var pageWidth: CGFloat {
+    get { self[PageWidthKey.self] }
+    set { self[PageWidthKey.self] = newValue }
+  }
+}
+
 /// The five text sizes of the app. Change weight at the call site, never the size.
 extension Font {
   /// 22 · the title of a page.

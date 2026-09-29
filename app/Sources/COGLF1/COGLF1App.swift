@@ -10,13 +10,14 @@ struct COGLF1App: App {
     Window("Forecast Studio", id: "main") {
       RootView()
         .environment(state)
-        .frame(minWidth: 1180, minHeight: 740)
+        .frame(minWidth: 960, minHeight: 640)
         .task {
           delegate.state = state
           await state.boot()
         }
     }
     .defaultSize(width: 1440, height: 900)
+    .windowResizability(.contentMinSize)
     .commands {
       CommandGroup(replacing: .newItem) {
         Button("Open Data File…") { state.chooseFile() }

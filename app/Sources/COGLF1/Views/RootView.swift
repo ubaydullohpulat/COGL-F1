@@ -2,10 +2,20 @@ import SwiftUI
 
 struct RootView: View {
   @Environment(AppState.self) private var state
+  @State private var columns: NavigationSplitViewVisibility = .all
+  @State private var windowWidth: CGFloat = 1440
+  @State private var sidebarWidth: CGFloat = 248
+  /// Middle of the chart or the page content, in window coordinates. The model bar sits over it.
+  @State private var pageCenter: CGFloat?
+
+  /// Measured from the window, not from the page: the parameters column would change the page's own width.
+  private var pageWidth: CGFloat {
+    windowWidth - (columns == .detailOnly ? 0 : sidebarWidth)
+  }
 
   var body: some View {
     @Bindable var state = state
-    NavigationSplitView {
+    NavigationSplitView(columnVisibility: $columns) {
       List(selection: $state.section) {
         Section {
           ForEach(SidebarSection.allCases) { s in
@@ -26,6 +36,7 @@ struct RootView: View {
       .environment(\.defaultMinListRowHeight, 48)
       .navigationSplitViewColumnWidth(min: 220, ideal: 248, max: 300)
       .safeAreaInset(edge: .bottom) { EngineFooter().padding(8) }
+      .background(widthReader { sidebarWidth = $0 })
     } detail: {
       Group {
         switch state.section {
@@ -36,27 +47,31 @@ struct RootView: View {
         case .server: ServerView()
         }
       }
+      .environment(\.pageWidth, pageWidth)
       .toolbar {
         // The toolbar centers this over the data column too; push it over the page content.
         if #available(macOS 26.0, *) {
           // The system bubble would stretch over the padding, so the bar draws its own.
           ToolbarItem(placement: .principal) {
-            ModelBar()
-              // Room around the buttons, so their hover shape doesn't touch the edge.
-              .controlSize(.small)
-              .font(.text)
-              .padding(.vertical, 4)
-              .glassEffect(.regular, in: Capsule())
-              .padding(.leading, dataColumnShown ? DataPanel.width : 0)
+            CenteredOver(target: pageCenter) {
+              ModelBar()
+                // Room around the buttons, so their hover shape doesn't touch the edge.
+                .controlSize(.small)
+                .font(.text)
+                .padding(.vertical, 4)
+                .glassEffect(.regular, in: Capsule())
+            }
           }
           .sharedBackgroundVisibility(.hidden)
         } else {
           ToolbarItem(placement: .principal) {
-            ModelBar().padding(.leading, dataColumnShown ? DataPanel.width : 0)
+            CenteredOver(target: pageCenter) { ModelBar() }
           }
         }
       }
+      .onPreferenceChange(PageCenterKey.self) { pageCenter = $0 }
     }
+    .background(WindowSizing(minSize: CGSize(width: 960, height: 640)) { windowWidth = $0 })
     .alert("Something went wrong", isPresented: Binding(get: { state.alert != nil }, set: { if !$0 { state.alert = nil } })) {
       Button("OK", role: .cancel) {}
     } message: {
@@ -75,11 +90,9 @@ struct RootView: View {
     }
   }
 
-  private var dataColumnShown: Bool {
-    switch state.section {
-    case .forecast: return state.dataset != nil
-    case .finetune: return true
-    default: return false
+  private func widthReader(_ store: @escaping (CGFloat) -> Void) -> some View {
+    GeometryReader { g in
+      Color.clear.onChange(of: g.size.width, initial: true) { _, w in store(w) }
     }
   }
 

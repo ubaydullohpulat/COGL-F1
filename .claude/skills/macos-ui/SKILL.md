@@ -27,6 +27,15 @@ Use `Theme` in `app/Sources/COGLF1/Views/Theme.swift`.
 - A control's hit target is the whole control. `ChoiceCard` must use a button style whose background is inside the button. A background behind the button only makes the text clickable.
 - Disclosure rows, including Advanced, open when the whole row is clicked, not only the chevron.
 
+## Window width
+
+The window can be as narrow as 960. Nothing may be pushed out of it.
+
+- Pages read `pageWidth` from the environment and fold their side panels when it is small. Do not raise the window minimum to make a layout fit.
+- Forecast attaches the parameters column (`.inspector`) only when the page is wide enough. Even hidden, it keeps the chart area at least 588 wide. In a narrow window the Parameters button opens the same form in a popover.
+- Fine-tune shows Settings and Progress as two tabs when they do not fit side by side.
+- The model bar is centered over the chart or page content with `CenteredOver` and `.modelBarCenter()`. It is shifted with an offset. Padding in a toolbar item widens the page.
+
 ## Copy
 
 The screen should be usable without reading a paragraph. If the label already says what to do, do not add a caption.

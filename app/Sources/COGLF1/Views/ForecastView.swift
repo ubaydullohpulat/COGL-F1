@@ -15,6 +15,14 @@ struct ForecastView: View {
   @AppStorage("forecast.bottomShare") private var bottomShare = 0.3
   @State private var dragStartShare: Double?
   @State private var chartZoom: Double = 1
+  @Environment(\.pageWidth) private var pageWidth
+  @State private var showParameters = false
+
+  /// Data column, chart and parameters side by side.
+  /// With the parameters column attached, the system keeps the chart at least 588 wide.
+  private static let wideWidth: CGFloat = DataPanel.width + 588 + 290
+  /// Too narrow for the parameters column: the toolbar button opens them in a popover instead.
+  private var narrow: Bool { pageWidth < Self.wideWidth }
 
   var body: some View {
     HStack(spacing: 0) {
@@ -23,16 +31,21 @@ struct ForecastView: View {
         Divider()
       }
       center.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+        .modelBarCenter()
     }
-    .inspector(isPresented: inspectorPresented) {
-      ForecastInspector(display: $display)
-        .inspectorColumnWidth(min: 290, ideal: 320, max: 400)
-    }
+    .modifier(InspectorWhenWide(wide: !narrow, isPresented: inspectorPresented, display: $display))
     .toolbar {
       if state.dataset != nil {
         ToolbarItem(placement: .primaryAction) {
-          Button { showInspector.toggle() } label: { Label("Parameters", systemImage: "sidebar.right") }
+          Button {
+            if narrow { showParameters.toggle() } else { showInspector.toggle() }
+          } label: { Label("Parameters", systemImage: narrow ? "slider.horizontal.3" : "sidebar.right") }
             .help("Show or hide forecast parameters")
+            .popover(isPresented: $showParameters, arrowEdge: .bottom) {
+              ForecastInspector(display: $display)
+                .environment(state)
+                .frame(width: 340, height: 520)
+            }
         }
       }
     }
@@ -41,8 +54,8 @@ struct ForecastView: View {
 
   private var inspectorPresented: Binding<Bool> {
     Binding(
-      get: { showInspector && state.dataset != nil },
-      set: { showInspector = $0 }
+      get: { showInspector && state.dataset != nil && !narrow },
+      set: { if !narrow { showInspector = $0 } }
     )
   }
 
@@ -265,6 +278,25 @@ struct ForecastView: View {
     if let img = renderer.nsImage {
       NSPasteboard.general.clearContents()
       NSPasteboard.general.writeObjects([img])
+    }
+  }
+}
+
+/// The parameters column. Attached only when there is room: even hidden, it widens the page
+/// beyond a narrow window, and the sidebar and the data column slide out of view.
+private struct InspectorWhenWide: ViewModifier {
+  var wide: Bool
+  var isPresented: Binding<Bool>
+  @Binding var display: ChartDisplay
+
+  func body(content: Content) -> some View {
+    if wide {
+      content.inspector(isPresented: isPresented) {
+        ForecastInspector(display: $display)
+          .inspectorColumnWidth(min: 290, ideal: 320, max: 400)
+      }
+    } else {
+      content
     }
   }
 }

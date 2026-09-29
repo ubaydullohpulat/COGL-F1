@@ -71,10 +71,21 @@ final class EngineManager {
     return nil
   }
 
+  /// Hash of the package list only, so rewording a comment does not ask people to reinstall 1 GB.
   private static var requirementsHash: String {
-    guard let dir = engineDir, let data = try? Data(contentsOf: dir.appendingPathComponent("requirements.txt")) else { return "" }
-    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    guard let dir = engineDir, let text = try? String(contentsOf: dir.appendingPathComponent("requirements.txt"), encoding: .utf8) else { return "" }
+    let packages = text.split(whereSeparator: \.isNewline)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
+      .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+      .joined(separator: "\n")
+    return SHA256.hash(data: Data(packages.utf8)).map { String(format: "%02x", $0) }.joined()
   }
+
+  /// Runtimes installed by 0.1.5 and earlier recorded a hash of the whole file. These are the same packages.
+  private static let olderHashes = [
+    "afdc9f397f732db515666a5994a6c54c11b8eac944934651c3bd538f3679371a": "fab463fb92d96d8b798f7b9c03eba8217d14f2e2a9c0fb6f4fe5e1cac5539365",
+    "ffb9271f16f701a0a8b90769d70c8a760eef7f5b381e65c87b92c3c5589f0805": "fab463fb92d96d8b798f7b9c03eba8217d14f2e2a9c0fb6f4fe5e1cac5539365",
+  ]
 
   // MARK: Lifecycle
 
@@ -102,7 +113,8 @@ final class EngineManager {
           let data = try? Data(contentsOf: Self.markerFile),
           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return false }
-    return (obj["requirements_hash"] as? String) == Self.requirementsHash
+    guard let recorded = obj["requirements_hash"] as? String else { return false }
+    return recorded == Self.requirementsHash || Self.olderHashes[recorded] == Self.requirementsHash
   }
 
   func start() async {

@@ -3,13 +3,46 @@ import SwiftUI
 
 struct FinetuneView: View {
   @Environment(AppState.self) private var state
+  @Environment(\.pageWidth) private var pageWidth
+  @State private var tab = 0
+
+  /// Data column, settings and progress side by side.
+  private var narrow: Bool { pageWidth < DataPanel.width + 400 + 380 }
 
   var body: some View {
     HStack(spacing: 0) {
       DataPanel().frame(width: DataPanel.width)
       Divider()
+      page.modelBarCenter()
+    }
+    .navigationTitle("Fine-tune")
+  }
+
+  @ViewBuilder private var page: some View {
+    HStack(spacing: 0) {
       if !state.engine.isRunning || !state.hasModel {
         SetupChecklist()
+      } else if narrow {
+        // One column at a time, so nothing is pushed out of the window.
+        VStack(spacing: 0) {
+          Picker("", selection: $tab) {
+            Text("Settings").tag(0)
+            Text("Progress").tag(1)
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .frame(maxWidth: 240)
+          .padding(Theme.space)
+          Divider()
+          if tab == 0 {
+            FinetuneForm().frame(maxWidth: .infinity, maxHeight: .infinity)
+          } else {
+            FinetuneMonitor().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+          }
+        }
+        .onChange(of: state.ftJob?.isActive == true) { _, active in
+          if active { tab = 1 }
+        }
       } else {
         FinetuneForm()
           .frame(width: 400)
@@ -19,7 +52,6 @@ struct FinetuneView: View {
           .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
       }
     }
-    .navigationTitle("Fine-tune")
   }
 }
 

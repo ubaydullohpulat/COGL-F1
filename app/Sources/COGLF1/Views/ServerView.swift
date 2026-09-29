@@ -10,12 +10,6 @@ struct RuntimeSetupControls: View {
     let e = state.engine
     VStack(alignment: .leading, spacing: 8) {
       switch e.state {
-      case .needsPython:
-        Text("No Python 3.10–3.13 or uv was found. Install one, then press Check again:")
-          .font(.text)
-        Text("brew install python@3.12   (or install uv, or Python from python.org)")
-          .font(.text.monospaced()).textSelection(.enabled)
-        Button("Check again") { Task { await state.boot() } }
       case .needsInstall:
         Button {
           Task {
@@ -26,7 +20,7 @@ struct RuntimeSetupControls: View {
           .buttonStyle(.borderedProminent)
           .controlSize(.large)
         if showsDetails {
-          Text("Uses \(e.findUV().map { "uv (\($0))" } ?? e.findBasePython() ?? "python3") → \(EngineManager.venvDir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
+          Text("Installs into \(EngineManager.runtimeDir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
             .font(.note).foregroundStyle(.secondary)
         }
       case .installing(let msg):
@@ -163,7 +157,7 @@ struct ServerView: View {
     case .running: return "Running"
     case .starting, .checking: return "Starting"
     case .installing: return "Installing"
-    case .needsInstall, .needsPython: return "Not installed"
+    case .needsInstall: return "Not installed"
     case .failed: return "Something went wrong"
     case .stopped: return "Stopped"
     }
@@ -173,7 +167,7 @@ struct ServerView: View {
     switch state.engine.state {
     case .running: return "checkmark.circle.fill"
     case .starting, .checking, .installing: return "clock.fill"
-    case .needsInstall, .needsPython: return "arrow.down.circle.fill"
+    case .needsInstall: return "arrow.down.circle.fill"
     case .failed: return "exclamationmark.triangle.fill"
     case .stopped: return "pause.circle.fill"
     }
@@ -183,7 +177,7 @@ struct ServerView: View {
     switch state.engine.state {
     case .running: return .green
     case .starting, .checking, .installing: return .orange
-    case .needsInstall, .needsPython: return .accentColor
+    case .needsInstall: return .accentColor
     case .failed: return .red
     case .stopped: return .secondary
     }
@@ -505,8 +499,8 @@ struct SettingsView: View {
         }
       }
       Section("Runtime") {
-        TextField("Base Python for the runtime", text: $basePython, prompt: Text(state.engine.findBasePython() ?? "auto"))
-        Text("Python 3.10–3.13 used to create the private environment. Leave empty to auto-detect (uv is preferred when installed).")
+        TextField("Base Python for the runtime", text: $basePython, prompt: Text("Automatic"))
+        Text("Leave empty and the app downloads its own Python. To use yours, enter the path to Python 3.10–3.13.")
           .font(.note).foregroundStyle(.secondary)
         LabeledContent("Environment", value: EngineManager.venvDir.path)
       }

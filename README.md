@@ -23,7 +23,7 @@ Think LM Studio, but for forecasting: download the model with one button, load i
 
 ## Install & run
 
-Requirements: Apple Silicon Mac, macOS 14+, and Python 3.10–3.13 (`brew install python@3.12`) or [uv](https://docs.astral.sh/uv/).
+Requirements: Apple Silicon Mac, macOS 14+. Nothing else has to be installed: the app downloads its own Python. Building from source needs the Swift toolchain (Xcode or the command line tools).
 
 ```bash
 scripts/build_app.sh            # → dist/Forecast Studio.app  (add --dmg for a disk image)
@@ -31,7 +31,7 @@ open "dist/Forecast Studio.app"
 ```
 
 On first launch:
-1. **Install runtime** creates a private Python environment at `~/Library/Application Support/COGL-F1/runtime/venv` with `timesfm[mlx,torch]==3.0.2` (about 1 GB, one time).
+1. **Install runtime** downloads [uv](https://docs.astral.sh/uv/) and Python 3.12 if the Mac has none, then creates a private Python environment at `~/Library/Application Support/COGL-F1/runtime/venv` with `timesfm[mlx,torch]==3.0.2` (about 1 GB, one time).
 2. **Models → Download model** fetches TimesFM 3 into `~/Library/Application Support/COGL-F1/models`.
 3. Open a file (or a bundled sample) and press **Run** (⌘R).
 

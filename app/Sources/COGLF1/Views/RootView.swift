@@ -127,7 +127,7 @@ struct EngineFooter: View {
     case .starting: return "Starting engine…"
     case .checking: return "Checking runtime…"
     case .installing: return "Installing runtime…"
-    case .needsInstall, .needsPython: return "Runtime not installed"
+    case .needsInstall: return "Runtime not installed"
     case .failed: return "Engine error"
     case .stopped: return "Engine stopped"
     }

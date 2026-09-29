@@ -8,7 +8,6 @@ import Observation
 final class EngineManager {
   enum State: Equatable {
     case checking
-    case needsPython
     case needsInstall
     case installing(String)
     case starting
@@ -94,7 +93,7 @@ final class EngineManager {
       pythonPath = Self.venvPython.path
       await start()
     } else {
-      state = findBasePython() == nil && findUV() == nil ? .needsPython : .needsInstall
+      state = .needsInstall
     }
   }
 
@@ -192,32 +191,55 @@ final class EngineManager {
 
   // MARK: Runtime install
 
+/// The app's own copy of uv, downloaded when the Mac has none.
+  static var ownUV: URL { runtimeDir.appendingPathComponent("bin/uv") }
+  /// Where uv keeps the Python it downloads for the runtime.
+  private static var pythonDir: URL { runtimeDir.appendingPathComponent("python", isDirectory: true) }
+
   func findUV() -> String? {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
-    return ["/opt/homebrew/bin/uv", "/usr/local/bin/uv", "\(home)/.local/bin/uv", "\(home)/.cargo/bin/uv"]
+    return [Self.ownUV.path, "/opt/homebrew/bin/uv", "/usr/local/bin/uv", "\(home)/.local/bin/uv", "\(home)/.cargo/bin/uv"]
       .first { FileManager.default.isExecutableFile(atPath: $0) }
   }
 
-  /// A Python ≥ 3.10 to create the venv from.
-  func findBasePython() -> String? {
-    if let custom = UserDefaults.standard.string(forKey: "basePython"), !custom.isEmpty,
-       Self.pythonVersion(custom).map({ $0 >= (3, 10) }) == true {
-      return custom
+  /// The Python chosen in Settings, when it is one the runtime can use.
+  /// Nothing else on the Mac is probed: running the system `python3` stub opens a developer tools prompt.
+  func customPython() -> String? {
+    guard let custom = UserDefaults.standard.string(forKey: "basePython"), !custom.isEmpty,
+          let v = Self.pythonVersion(custom), v >= (3, 10), v < (3, 14)
+    else { return nil }
+    return custom
+  }
+
+  /// Returns a uv to install with, downloading the app's own copy when the Mac has none.
+  private func ensureUV() async -> String? {
+    if let uv = findUV() { return uv }
+    state = .installing("Getting the installer…")
+    let name = "uv-aarch64-apple-darwin.tar.gz"
+    let base = "https://github.com/astral-sh/uv/releases/latest/download/"
+    appendLog("Downloading \(base)\(name)")
+    do {
+      let (archive, response) = try await URLSession.shared.download(from: URL(string: base + name)!)
+      defer { try? FileManager.default.removeItem(at: archive) }
+      guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+        appendLog("The installer download failed.")
+        return nil
+      }
+      let (sum, _) = try await URLSession.shared.data(from: URL(string: base + name + ".sha256")!)
+      let expected = String(decoding: sum, as: UTF8.self).split(whereSeparator: \.isWhitespace).first.map(String.init)
+      let actual = SHA256.hash(data: try Data(contentsOf: archive)).map { String(format: "%02x", $0) }.joined()
+      guard expected == actual else {
+        appendLog("The installer download is damaged (checksum mismatch).")
+        return nil
+      }
+      let bin = Self.ownUV.deletingLastPathComponent()
+      try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+      guard await run("/usr/bin/tar", ["-xzf", archive.path, "-C", bin.path, "--strip-components", "1"]) else { return nil }
+    } catch {
+      appendLog("The installer download failed: \(error.localizedDescription)")
+      return nil
     }
-    var candidates: [String] = []
-    for v in ["3.13", "3.12", "3.11", "3.10"] {
-      candidates += [
-        "/opt/homebrew/bin/python\(v)",
-        "/opt/homebrew/opt/python@\(v)/bin/python\(v)",
-        "/usr/local/bin/python\(v)",
-        "/Library/Frameworks/Python.framework/Versions/\(v)/bin/python3",
-      ]
-    }
-    candidates += ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
-    for c in candidates where FileManager.default.isExecutableFile(atPath: c) {
-      if let v = Self.pythonVersion(c), v >= (3, 10), v < (3, 14) { return c }
-    }
-    return nil
+    return FileManager.default.isExecutableFile(atPath: Self.ownUV.path) ? Self.ownUV.path : nil
   }
 
   nonisolated static func pythonVersion(_ path: String) -> (Int, Int)? {
@@ -247,35 +269,19 @@ final class EngineManager {
     try? fm.removeItem(at: Self.markerFile)
     installProgress = 0.02
 
-    let uv = findUV()
-    let base = findBasePython()
-    var ok: Bool
-    if let uv {
-      state = .installing("Creating Python environment with uv…")
-      var args = ["venv", Self.venvDir.path, "--seed"]
-      if base == nil { args += ["--python", "3.12"] } else { args += ["--python", base!] }
-      ok = await run(uv, args)
-      installProgress = 0.15
-      if ok {
-        state = .installing("Installing TimesFM 3, MLX, PyTorch… (≈ 1 GB, several minutes)")
-        ok = await run(uv, ["pip", "install", "--python", Self.venvPython.path, "-r", req], progressFrom: 0.15)
-      }
-    } else if let base {
-      state = .installing("Creating Python environment…")
-      ok = await run(base, ["-m", "venv", Self.venvDir.path])
-      installProgress = 0.1
-      if ok {
-        state = .installing("Updating pip…")
-        ok = await run(Self.venvPython.path, ["-m", "pip", "install", "--upgrade", "pip"])
-      }
-      installProgress = 0.15
-      if ok {
-        state = .installing("Installing TimesFM 3, MLX, PyTorch… (≈ 1 GB, several minutes)")
-        ok = await run(Self.venvPython.path, ["-m", "pip", "install", "--progress-bar", "off", "-r", req], progressFrom: 0.15)
-      }
-    } else {
-      state = .needsPython
+    guard let uv = await ensureUV() else {
+      state = .failed("Could not download the installer. Check your internet connection, then try again.")
       return
+    }
+    installProgress = 0.05
+    let base = customPython()
+    state = .installing("Setting up Python…")
+    // Without a Python from Settings, uv downloads its own. Nothing has to be on the Mac already.
+    var ok = await run(uv, ["venv", Self.venvDir.path, "--seed", "--python", base ?? "3.12"])
+    installProgress = 0.15
+    if ok {
+      state = .installing("Downloading the forecasting tools. About 1 GB, several minutes.")
+      ok = await run(uv, ["pip", "install", "--python", Self.venvPython.path, "-r", req], progressFrom: 0.15)
     }
     if ok {
       state = .installing("Verifying…")
@@ -306,6 +312,8 @@ final class EngineManager {
     var env = ProcessInfo.processInfo.environment
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
+    env["UV_PYTHON_INSTALL_DIR"] = Self.pythonDir.path
+    env["UV_PYTHON_PREFERENCE"] = "managed"
     p.environment = env
     attachOutput(to: p, progressFrom: progressFrom)
     return await withCheckedContinuation { cont in

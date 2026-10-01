@@ -79,19 +79,23 @@ With the hook on, `git push` is refused while a test fails. The app's tests are 
 
 When the app opens it asks GitHub for the latest release of this repository. If that is newer, it offers to update: it downloads the DMG, checks it against the published SHA-256 and the developer's signature, replaces itself and restarts. "Don't show this again" ends the question; Settings → Updates turns it back on and has a manual check, as does the app menu.
 
+There are two kinds of release. Official releases (`v1.0.0`) are what everyone is offered. Development versions (`v1.1.0-dev.1`) are GitHub pre-releases and are offered only with Settings → Updates → Include development versions; people who turn that on also get the official release that follows.
+
 To try an update without publishing one, point the app at a local feed: `COGLF1_UPDATE_FEED=file:///path/feed.json` with the JSON shape of GitHub's `releases/latest`.
 
 ## Release
 
-Pushing a version tag builds, notarizes, and publishes the DMG. The tag must match `__version__` in `engine/coglf1_engine/__init__.py`. For `0.1.1` that file contains `__version__ = "0.1.1"` and the tag is `v0.1.1`.
+Pushing a version tag builds, notarizes, and publishes the DMG. The tag must match `__version__` in `engine/coglf1_engine/__init__.py`. For `1.0.1` that file contains `__version__ = "1.0.1"` and the tag is `v1.0.1`.
 
 Commit the version bump to `main`, then:
 
 ```bash
 git push origin main
-git tag v0.1.1
-git push origin v0.1.1
+git tag v1.0.1
+git push origin v1.0.1
 ```
+
+A development version works the same way with a suffix: `__version__ = "1.1.0-dev.1"` and the tag `v1.1.0-dev.1`. The workflow publishes it as a pre-release. Count the suffix up for each one (`-dev.2`, `-dev.3`) and drop it for the official `v1.1.0`.
 
 The workflow is `.github/workflows/release.yml`. It runs only on that tag push. The DMG is attached to the GitHub Release when the Actions run succeeds.
 

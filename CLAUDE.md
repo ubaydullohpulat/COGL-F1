@@ -16,4 +16,4 @@ Shared pieces live in `app/Sources/COGLF1/Views/Theme.swift`: spacing, the five 
 
 ## Release
 
-`__version__` in `engine/coglf1_engine/__init__.py` must match the git tag. Pushing `v0.1.2` builds and notarizes `dist/Forecast-Studio-0.1.2.dmg` via `.github/workflows/release.yml`. Installed apps find that release themselves (`Core/Updater.swift`) and need the `.dmg` and its `.dmg.sha256` among the release assets.
+`__version__` in `engine/coglf1_engine/__init__.py` must match the git tag. Pushing `v1.0.1` builds and notarizes `dist/Forecast-Studio-1.0.1.dmg` via `.github/workflows/release.yml`. Official releases are `v1.0.1`; development versions carry a suffix, `v1.1.0-dev.1`, and are published as pre-releases that only people who asked for development versions are offered. Installed apps find that release themselves (`Core/Updater.swift`) and need the `.dmg` and its `.dmg.sha256` among the release assets.

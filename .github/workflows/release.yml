@@ -1,6 +1,8 @@
 name: Release
 
-# Push a tag that matches engine/coglf1_engine/__init__.py, for example v0.1.1.
+# Push a tag that matches engine/coglf1_engine/__init__.py, for example v1.0.0.
+# A tag with a suffix, such as v1.1.0-dev.1, is a development version: it is published as a
+# pre-release, which only people who asked for development versions are offered.
 # Required repository secrets:
 #   APPLE_CERTIFICATE              base64 of the Developer ID Application .p12
 #   APPLE_CERTIFICATE_PASSWORD     password for that .p12
@@ -71,8 +73,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          channel=(--latest)
+          if [[ "$VERSION" == *-* ]]; then channel=(--prerelease --latest=false); fi
           gh release create "$GITHUB_REF_NAME" \
             "dist/Forecast-Studio-${VERSION}.dmg" \
             "dist/Forecast-Studio-${VERSION}.dmg.sha256" \
             --title "$GITHUB_REF_NAME" \
-            --generate-notes
+            --generate-notes \
+            "${channel[@]}"

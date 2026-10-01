@@ -493,6 +493,10 @@ struct SettingsView: View {
       Section("Updates") {
         Toggle("Check for updates when the app opens", isOn: $updater.checksOnLaunch)
         HStack(spacing: Theme.space) {
+          Toggle("Include development versions", isOn: $updater.includesDevelopment)
+          HintButton(text: "Development versions come out earlier and are tested less. Without them you get official releases only.")
+        }
+        HStack(spacing: Theme.space) {
           Button("Check for Updates") { Task { await updater.check() } }
             .disabled(updater.phase == .checking || updater.phase == .restarting || updater.isWorking)
           Text(updateStatus).font(.note).foregroundStyle(.secondary)
@@ -525,7 +529,7 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .frame(width: 560, height: 600)
+    .frame(width: 560, height: 640)
   }
 
   private var updateStatus: String {

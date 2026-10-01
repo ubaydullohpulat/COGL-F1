@@ -4,19 +4,30 @@ import Foundation
 import Observation
 import Security
 
-/// A version such as 0.1.7. Tags may carry a leading "v".
+/// A version such as 1.0.0, or 1.1.0-dev.2 for a development build. Tags may carry a leading "v".
 struct AppVersion: Comparable, Hashable, CustomStringConvertible {
   var parts: [Int]
+  /// What follows a hyphen, split at the dots. A version with it comes before the same version without.
+  var pre: [String] = []
 
   init?(_ text: String) {
-    var digits = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    if digits.hasPrefix("v") || digits.hasPrefix("V") { digits.removeFirst() }
-    let numbers = digits.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+    var rest = Substring(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    if rest.hasPrefix("v") || rest.hasPrefix("V") { rest.removeFirst() }
+    if let hyphen = rest.firstIndex(of: "-") {
+      pre = rest[rest.index(after: hyphen)...].split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+      guard !pre.contains(where: { $0.isEmpty || !$0.allSatisfy { $0.isLetter || $0.isNumber } }) else { return nil }
+      rest = rest[..<hyphen]
+    }
+    let numbers = rest.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
     guard !numbers.isEmpty, !numbers.contains(nil) else { return nil }
     parts = numbers.compactMap { $0 }
   }
 
-  var description: String { parts.map(String.init).joined(separator: ".") }
+  var isDevelopment: Bool { !pre.isEmpty }
+
+  var description: String {
+    parts.map(String.init).joined(separator: ".") + (pre.isEmpty ? "" : "-" + pre.joined(separator: "."))
+  }
 
   /// 0.2 and 0.2.0 are the same version.
   private var trimmed: [Int] {
@@ -25,9 +36,22 @@ struct AppVersion: Comparable, Hashable, CustomStringConvertible {
     return p
   }
 
-  static func == (a: AppVersion, b: AppVersion) -> Bool { a.trimmed == b.trimmed }
-  func hash(into hasher: inout Hasher) { hasher.combine(trimmed) }
-  static func < (a: AppVersion, b: AppVersion) -> Bool { a.trimmed.lexicographicallyPrecedes(b.trimmed) }
+  static func == (a: AppVersion, b: AppVersion) -> Bool { a.trimmed == b.trimmed && a.pre == b.pre }
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(trimmed)
+    hasher.combine(pre)
+  }
+
+  static func < (a: AppVersion, b: AppVersion) -> Bool {
+    if a.trimmed != b.trimmed { return a.trimmed.lexicographicallyPrecedes(b.trimmed) }
+    if a.pre.isEmpty || b.pre.isEmpty { return !a.pre.isEmpty && b.pre.isEmpty }
+    for (x, y) in zip(a.pre, b.pre) where x != y {
+      // dev.2 comes before dev.10: numbers compare as numbers.
+      if let i = Int(x), let j = Int(y) { return i < j }
+      return x < y
+    }
+    return a.pre.count < b.pre.count
+  }
 }
 
 /// A release on GitHub, as its API describes it.
@@ -61,13 +85,21 @@ struct AppRelease: Equatable {
   /// The published SHA-256 of the disk image.
   var checksum: URL?
 
-  init?(_ release: GitHubRelease) {
-    guard release.draft != true, release.prerelease != true, let version = AppVersion(release.tag),
+  /// GitHub marks development versions as pre-releases. They count only when `development` is on.
+  init?(_ release: GitHubRelease, development: Bool = false) {
+    guard release.draft != true, development || release.prerelease != true, let version = AppVersion(release.tag),
           let dmg = release.assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") }) else { return nil }
     self.version = version
     page = release.page
     self.dmg = dmg.url
     checksum = release.assets.first { $0.name == dmg.name + ".sha256" }?.url
+  }
+
+  /// The newest installable release in GitHub's answer: one release, or a list of them.
+  static func newest(in data: Data, development: Bool) throws -> AppRelease? {
+    let decoder = JSONDecoder()
+    let all = try (try? decoder.decode([GitHubRelease].self, from: data)) ?? [decoder.decode(GitHubRelease.self, from: data)]
+    return all.compactMap { AppRelease($0, development: development) }.max { $0.version < $1.version }
   }
 
   /// The digest in a `shasum -a 256` line: "<64 hex characters>  <file>".
@@ -108,6 +140,15 @@ final class Updater {
     didSet { UserDefaults.standard.set(checksOnLaunch, forKey: "updates.checkOnLaunch") }
   }
 
+  /// Also offer development versions: newer, less tested. Without it only official releases count.
+  var includesDevelopment: Bool = UserDefaults.standard.bool(forKey: "updates.development") {
+    didSet {
+      UserDefaults.standard.set(includesDevelopment, forKey: "updates.development")
+      // What the last check found belongs to the other choice.
+      if !isWorking, phase != .checking, phase != .restarting { phase = .idle }
+    }
+  }
+
   /// Nil when run as a bare executable, which has no version to compare.
   let current = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String).flatMap(AppVersion.init)
 
@@ -116,7 +157,9 @@ final class Updater {
   private var feed: URL {
     // A different feed, for trying an update without publishing a release.
     if let custom = ProcessInfo.processInfo.environment["COGLF1_UPDATE_FEED"], let url = URL(string: custom) { return url }
-    return URL(string: "https://api.github.com/repos/\(Self.repo)/releases/latest")!
+    // "latest" is GitHub's newest official release. The list also has the development ones.
+    let path = includesDevelopment ? "releases?per_page=30" : "releases/latest"
+    return URL(string: "https://api.github.com/repos/\(Self.repo)/\(path)")!
   }
 
   // MARK: Checking
@@ -177,7 +220,7 @@ final class Updater {
       if let http = response as? HTTPURLResponse, http.statusCode != 200 {
         throw UpdateError(message: "GitHub answered with status \(http.statusCode).")
       }
-      let release = AppRelease(try JSONDecoder().decode(GitHubRelease.self, from: data))
+      let release = try AppRelease.newest(in: data, development: includesDevelopment)
       phase = Self.verdict(current: current, latest: release)
     } catch {
       phase = .failed("Could not check for updates. \(error.localizedDescription)")

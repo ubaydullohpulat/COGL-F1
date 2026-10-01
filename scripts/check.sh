@@ -16,8 +16,8 @@ if [[ "$WHAT" != "all" && "$WHAT" != "app" && "$WHAT" != "engine" ]]; then
 fi
 
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$ROOT/engine/coglf1_engine/__init__.py")"
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "__version__ in engine/coglf1_engine/__init__.py is '$VERSION', not a version like 0.1.8." >&2
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-dev\.[0-9]+)?$ ]]; then
+  echo "__version__ in engine/coglf1_engine/__init__.py is '$VERSION', not a version like 1.0.0 or 1.1.0-dev.1." >&2
   exit 1
 fi
 

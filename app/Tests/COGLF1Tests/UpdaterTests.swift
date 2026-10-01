@@ -10,7 +10,7 @@ final class AppVersionTests: XCTestCase {
   }
 
   func testRejectsWhatIsNotAVersion() {
-    for text in ["", "v", "latest", "1.x", "0.1.7-beta", "1..2"] {
+    for text in ["", "v", "latest", "1.x", "1..2", "1.0-", "1.0-dev..2", "1.0-dev 2", "-dev"] {
       XCTAssertNil(AppVersion(text), text)
     }
   }
@@ -21,6 +21,19 @@ final class AppVersionTests: XCTestCase {
     XCTAssertLessThan(AppVersion("0.1")!, AppVersion("0.1.1")!)
     XCTAssertEqual(AppVersion("0.2")!, AppVersion("0.2.0")!)
     XCTAssertFalse(AppVersion("0.2.0")! > AppVersion("0.2")!)
+  }
+
+  func testDevelopmentVersionsComeBeforeTheirRelease() {
+    let dev = AppVersion("v1.1.0-dev.2")!
+    XCTAssertTrue(dev.isDevelopment)
+    XCTAssertFalse(AppVersion("1.1.0")!.isDevelopment)
+    XCTAssertEqual(dev.description, "1.1.0-dev.2")
+    XCTAssertLessThan(AppVersion("1.0.0")!, dev)
+    XCTAssertLessThan(dev, AppVersion("1.1.0")!)
+    XCTAssertLessThan(dev, AppVersion("1.1.0-dev.10")!)
+    XCTAssertLessThan(AppVersion("1.1.0-dev")!, AppVersion("1.1.0-dev.1")!)
+    XCTAssertEqual(AppVersion("1.1-dev.2")!, dev)
+    XCTAssertNotEqual(dev, AppVersion("1.1.0")!)
   }
 }
 
@@ -65,6 +78,52 @@ final class UpdateCheckTests: XCTestCase {
     XCTAssertEqual(Updater.verdict(current: AppVersion("0.1.8"), latest: nil), .upToDate)
     // A build without a version (swift run) never offers to replace itself.
     XCTAssertEqual(Updater.verdict(current: nil, latest: latest), .upToDate)
+  }
+
+  /// The list GitHub answers with for /releases: newest first, development versions marked as pre-releases.
+  private func list() throws -> Data {
+    func entry(_ tag: String, prerelease: Bool, draft: Bool = false) -> String {
+      let dmg = "Forecast-Studio-\(tag.dropFirst()).dmg"
+      let base = "https://github.com/ubaydullohpulat/COGL-F1/releases/download/\(tag)/"
+      return """
+        {"tag_name": "\(tag)", "html_url": "https://github.com/ubaydullohpulat/COGL-F1/releases/tag/\(tag)",
+         "draft": \(draft), "prerelease": \(prerelease),
+         "assets": [{"name": "\(dmg)", "browser_download_url": "\(base)\(dmg)"},
+                    {"name": "\(dmg).sha256", "browser_download_url": "\(base)\(dmg).sha256"}]}
+        """
+    }
+    let entries = [
+      entry("v1.2.0-dev.1", prerelease: true, draft: true), entry("v1.1.0-dev.2", prerelease: true),
+      entry("v1.1.0-dev.1", prerelease: true), entry("v1.0.0", prerelease: false), entry("v0.1.8", prerelease: false),
+    ]
+    return Data("[\(entries.joined(separator: ","))]".utf8)
+  }
+
+  func testOfficialReleasesOnlyByDefault() throws {
+    let newest = try XCTUnwrap(AppRelease.newest(in: list(), development: false))
+    XCTAssertEqual(newest.version, AppVersion("1.0.0"))
+    XCTAssertEqual(Updater.verdict(current: AppVersion("1.0.0"), latest: newest), .upToDate)
+  }
+
+  func testDevelopmentVersionsWhenAskedFor() throws {
+    let newest = try XCTUnwrap(AppRelease.newest(in: list(), development: true))
+    XCTAssertEqual(newest.version, AppVersion("1.1.0-dev.2"))
+    XCTAssertEqual(Updater.verdict(current: AppVersion("1.0.0"), latest: newest), .available(newest))
+    XCTAssertEqual(Updater.verdict(current: AppVersion("1.1.0-dev.1"), latest: newest), .available(newest))
+    // Someone on a development version still gets the official release that follows it.
+    let official = try XCTUnwrap(AppRelease(release(tag: "v1.1.0")))
+    XCTAssertEqual(Updater.verdict(current: AppVersion("1.1.0-dev.2"), latest: official), .available(official))
+  }
+
+  func testTurningDevelopmentOffNeverGoesBackToAnOlderVersion() throws {
+    let newest = try XCTUnwrap(AppRelease.newest(in: list(), development: false))
+    XCTAssertEqual(Updater.verdict(current: AppVersion("1.1.0-dev.2"), latest: newest), .upToDate)
+  }
+
+  func testASingleReleaseIsReadLikeAList() throws {
+    let one = try JSONEncoder().encode(["tag_name": "v1.0.0"])
+    XCTAssertThrowsError(try AppRelease.newest(in: one, development: false))
+    XCTAssertNil(try AppRelease.newest(in: Data("[]".utf8), development: true))
   }
 
   func testReadsTheDigestOfAChecksumFile() {

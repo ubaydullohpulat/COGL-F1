@@ -212,6 +212,7 @@ struct SeriesSelection: Encodable {
 final class AppState {
   let engine = EngineManager()
   let downloader = ModelDownloader()
+  let updater = Updater()
   let catalog = ModelCatalog()
 
   var section: SidebarSection = .forecast
@@ -248,6 +249,8 @@ final class AppState {
   // Fine-tuning
   var ftSettings = FinetuneSettings()
   var ftJob: JobSnapshot?
+  /// Stop & save or Cancel was pressed. The engine stops at its next training step, not at once.
+  var ftStopping = false
   private var ftPoll: Task<Void, Never>?
 
   var currentResult: ForecastResult? { results.first { $0.resultId == currentResultId } ?? results.first }
@@ -363,7 +366,12 @@ final class AppState {
   }
 
   func unloadModel() async {
-    status = try? await client.post("unload", as: EngineStatus.self)
+    do {
+      status = try await client.post("unload", as: EngineStatus.self)
+    } catch {
+      alert = error.localizedDescription
+      await refreshStatus()
+    }
   }
 
   func applyModelFlags() async {
@@ -556,13 +564,27 @@ final class AppState {
 
   private func pollFinetune() {
     ftPoll?.cancel()
+    ftStopping = false
     ftPoll = Task { [weak self] in
+      var misses = 0
       while !Task.isCancelled {
         guard let self, let id = self.ftJob?.id else { return }
-        if let snap = try? await self.client.get("jobs/\(id)?log_tail=400", as: JobSnapshot.self) {
+        do {
+          let snap = try await self.client.get("jobs/\(id)?log_tail=400", as: JobSnapshot.self)
+          misses = 0
           self.ftJob = snap
           if !snap.isActive {
+            self.ftStopping = false
             await self.refreshModels()
+            return
+          }
+        } catch {
+          misses += 1
+          if let lost = FinetunePolling.lostJob(misses: misses, engineRunning: self.engine.isRunning, error: error) {
+            // Say so, instead of showing a job that never moves and buttons that do nothing.
+            self.ftJob?.status = "failed"
+            self.ftJob?.error = lost
+            self.ftStopping = false
             return
           }
         }
@@ -573,6 +595,27 @@ final class AppState {
 
   func stopFinetune(save: Bool) async {
     guard let id = ftJob?.id else { return }
-    _ = try? await client.post("jobs/\(id)/\(save ? "finish" : "cancel")", as: JobSnapshot.self)
+    ftStopping = true
+    do {
+      let snap = try await client.post("jobs/\(id)/\(save ? "finish" : "cancel")", as: JobSnapshot.self)
+      ftJob = snap
+      ftStopping = snap.isActive
+    } catch {
+      ftStopping = false
+      alert = "Could not stop fine-tuning. \(error.localizedDescription)"
+    }
+  }
+}
+
+/// When the app gives up on a fine-tuning job it can no longer reach.
+enum FinetunePolling {
+  /// Failed polls in a row before the job counts as lost. One slow answer is not enough.
+  static let patience = 5
+
+  /// The message to show for a lost job, or nil to keep polling.
+  static func lostJob(misses: Int, engineRunning: Bool, error: Error) -> String? {
+    if !engineRunning { return "The engine stopped while fine-tuning. Start it again on the Engine page." }
+    guard misses >= patience else { return nil }
+    return "Lost contact with the fine-tuning job. \(error.localizedDescription)"
   }
 }

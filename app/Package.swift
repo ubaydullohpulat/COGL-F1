@@ -9,6 +9,11 @@ let package = Package(
       name: "COGLF1",
       path: "Sources/COGLF1",
       exclude: ["Resources"]
-    )
+    ),
+    .testTarget(
+      name: "COGLF1Tests",
+      dependencies: ["COGLF1"],
+      path: "Tests/COGLF1Tests"
+    ),
   ]
 )

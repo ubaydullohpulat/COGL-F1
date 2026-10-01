@@ -1,0 +1,17 @@
+name: Tests
+
+# The app's tests on every push and pull request. The engine tests need the Apple GPU,
+# which hosted runners do not have: scripts/check.sh runs them on the Mac before each push.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift tests
+        run: cd app && swift test

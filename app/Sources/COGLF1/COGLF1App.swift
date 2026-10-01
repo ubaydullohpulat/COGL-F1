@@ -15,10 +15,15 @@ struct COGLF1App: App {
           delegate.state = state
           await state.boot()
         }
+        .task { await state.updater.checkAtLaunch() }
     }
     .defaultSize(width: 1440, height: 900)
     .windowResizability(.contentMinSize)
     .commands {
+      CommandGroup(after: .appInfo) {
+        Button("Check for Updates…") { Task { await state.updater.checkAndTell() } }
+          .disabled(state.updater.isWorking)
+      }
       CommandGroup(replacing: .newItem) {
         Button("Open Data File…") { state.chooseFile() }
           .keyboardShortcut("o")
@@ -29,7 +34,7 @@ struct COGLF1App: App {
           .disabled(state.isForecasting)
         Button("Load Selected Model") { Task { await state.loadSelectedModel() } }
           .keyboardShortcut("l")
-        Button("Eject Model") { Task { await state.unloadModel() } }
+        Button("Unload Model") { Task { await state.unloadModel() } }
           .keyboardShortcut("e", modifiers: [.command, .shift])
       }
     }

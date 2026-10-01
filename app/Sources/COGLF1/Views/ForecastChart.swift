@@ -144,6 +144,8 @@ private struct SeriesChart<X: ChartX>: View {
   @State private var dragOrigin: Double?
   @State private var plotWidth: CGFloat = 1
   @State private var wheel = ScrollWheelMonitor()
+  /// With a mouse the system keeps scroll bars on screen. With a trackpad they show only while scrolling.
+  @State private var scrollBarStays = NSScroller.preferredScrollerStyle == .legacy
 
   var body: some View {
     if let openAt = model.openAt ?? allXs.first {
@@ -251,6 +253,11 @@ private struct SeriesChart<X: ChartX>: View {
             .allowsHitTesting(false)
         }
       }
+    }
+    // The chart draws its scroll bar below its own frame, on top of whatever comes next.
+    .padding(.bottom, scrollable && scrollBarStays ? Theme.space * 2 : 0)
+    .onReceive(NotificationCenter.default.publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
+      scrollBarStays = NSScroller.preferredScrollerStyle == .legacy
     }
   }
 

@@ -488,7 +488,21 @@ struct SettingsView: View {
   @AppStorage("modelsDir") private var modelsDir = ""
 
   var body: some View {
+    @Bindable var updater = state.updater
     Form {
+      Section("Updates") {
+        Toggle("Check for updates when the app opens", isOn: $updater.checksOnLaunch)
+        HStack(spacing: Theme.space) {
+          Button("Check for Updates") { Task { await updater.check() } }
+            .disabled(updater.phase == .checking || updater.phase == .restarting || updater.isWorking)
+          Text(updateStatus).font(.note).foregroundStyle(.secondary)
+          Spacer(minLength: 0)
+          if case .available(let release) = updater.phase {
+            Button("Update") { Task { await updater.install(release) } }
+              .buttonStyle(.borderedProminent)
+          }
+        }
+      }
       Section("Hugging Face") {
         SecureField("Access token (optional)", text: $token)
           .onSubmit { Keychain.set("hf_token", token) }
@@ -511,6 +525,20 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .frame(width: 560, height: 440)
+    .frame(width: 560, height: 600)
+  }
+
+  private var updateStatus: String {
+    let updater = state.updater
+    switch updater.phase {
+    case .idle: return updater.current.map { "You have version \($0)." } ?? ""
+    case .checking: return "Checking…"
+    case .upToDate: return "You have the latest version\(updater.current.map { ", \($0)" } ?? "")."
+    case .available(let release): return "Version \(release.version) is available."
+    case .downloading: return "Downloading…"
+    case .installing: return "Installing…"
+    case .restarting: return "Restarting…"
+    case .failed(let message): return message
+    }
   }
 }

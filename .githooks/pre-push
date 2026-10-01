@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Refuses a push while a test fails. Turn the hooks on once per clone:
+#   git config core.hooksPath .githooks
+# The tests run on the files as they are now, so commit or stash unfinished work first.
+exec "$(git rev-parse --show-toplevel)/scripts/check.sh"

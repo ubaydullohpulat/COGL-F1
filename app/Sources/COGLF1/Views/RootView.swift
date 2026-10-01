@@ -48,6 +48,7 @@ struct RootView: View {
         }
       }
       .environment(\.pageWidth, pageWidth)
+      .modifier(UpdatePrompts())
       .toolbar {
         // The toolbar centers this over the data column too; push it over the page content.
         if #available(macOS 26.0, *) {
@@ -103,6 +104,35 @@ struct RootView: View {
     case .server where !state.engine.isRunning: return Text("!")
     default: return nil
     }
+  }
+}
+
+/// The answer to Check for Updates, and the wait while an update installs.
+private struct UpdatePrompts: ViewModifier {
+  @Environment(AppState.self) private var state
+
+  func body(content: Content) -> some View {
+    let updater = state.updater
+    content
+      // On a view of its own: two alerts on one view hide each other.
+      .background(
+        Color.clear
+          .alert("Updates", isPresented: Binding(get: { updater.notice != nil }, set: { if !$0 { updater.notice = nil } })) {
+            Button("OK", role: .cancel) {}
+          } message: {
+            Text(updater.notice ?? "")
+          }
+      )
+      .sheet(isPresented: Binding(get: { updater.isWorking }, set: { _ in })) {
+        VStack(spacing: Theme.space * 2) {
+          ProgressView()
+          Text(updater.phase == .installing ? "Installing the update…" : "Downloading the update…")
+            .font(.text)
+        }
+        .padding(Theme.space * 3)
+        .frame(minWidth: 280)
+        .interactiveDismissDisabled()
+      }
   }
 }
 

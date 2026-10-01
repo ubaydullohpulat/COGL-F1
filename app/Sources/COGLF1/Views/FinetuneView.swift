@@ -222,9 +222,12 @@ struct FinetuneMonitor: View {
           }
           Spacer()
           if job.isActive {
+            if state.ftStopping { ProgressView().controlSize(.small) }
             Button("Stop & save") { Task { await state.stopFinetune(save: true) } }
               .help("Finish now and save the best weights so far")
+              .disabled(state.ftStopping)
             Button("Cancel", role: .destructive) { Task { await state.stopFinetune(save: false) } }
+              .disabled(state.ftStopping)
           }
         }
         ProgressView(value: job.progress)
@@ -248,7 +251,9 @@ struct FinetuneMonitor: View {
     case "completed": return "Completed"
     case "cancelled": return "Cancelled"
     case "failed": return "Failed"
-    default: return j.message.isEmpty ? "Starting…" : j.message
+    default:
+      if state.ftStopping { return "Stopping…" }
+      return j.message.isEmpty ? "Starting…" : j.message
     }
   }
 

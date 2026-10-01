@@ -9,6 +9,7 @@ both the MLX and the PyTorch backends load exactly like the base model.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import math
@@ -262,6 +263,42 @@ def _loss(pred, future, context, kind: str):
   return torch.maximum(levels * diff, (levels - 1) * diff).mean()
 
 
+# --------------------------------------------------------------------------- gradients
+
+
+def _safe_sqrt(x):
+  """sqrt with a gradient of 0 at 0. The values are the same as torch.sqrt."""
+  import torch
+
+  positive = x > 0
+  return torch.where(positive, torch.sqrt(torch.where(positive, x, torch.ones_like(x))), torch.zeros_like(x))
+
+
+@contextlib.contextmanager
+def _trainable_running_stats():
+  """Lets gradients pass through TimesFM's running statistics.
+
+  They take sqrt(variance). A series that is flat for a stretch (a holiday flag, a promo column)
+  has variance 0 there, where the gradient of sqrt is infinite. One such window turns every weight
+  into NaN on the first step. Inference never sees it, because it runs without gradients.
+  """
+  import torch
+  from timesfm3.torch import util
+
+  class SafeTorch:
+    sqrt = staticmethod(_safe_sqrt)
+
+    def __getattr__(self, name):
+      return getattr(torch, name)
+
+  original = util.torch
+  util.torch = SafeTorch()
+  try:
+    yield
+  finally:
+    util.torch = original
+
+
 # --------------------------------------------------------------------------- training
 
 
@@ -336,7 +373,8 @@ def run_finetune(
     return None if a is None else torch.from_numpy(a).to(device)
 
   def forward(w: _Windows):
-    out = decode(model, to_t(w.target), horizon=h, past_only_covariates=to_t(w.po), past_future_covariates=to_t(w.pf))
+    with _trainable_running_stats():
+      out = decode(model, to_t(w.target), horizon=h, past_only_covariates=to_t(w.po), past_future_covariates=to_t(w.pf))
     return out[:, : w.target.shape[1], :h]  # decode also returns rows for the covariates
 
   def evaluate() -> dict[str, float] | None:
@@ -346,6 +384,7 @@ def run_finetune(
     losses, maes, n = [], [], 0
     with torch.no_grad():
       for i in range(0, len(val.target), bs):
+        job.check_cancel()
         w = _Windows(
           val.target[i : i + bs],
           val.future[i : i + bs],
@@ -363,8 +402,11 @@ def run_finetune(
   def trainable_state() -> dict[str, torch.Tensor]:
     return {k: v.detach().to("cpu").clone() for k, v in model.named_parameters() if v.requires_grad}
 
+  job.check_cancel()
   job.update(0.03, "Zero-shot validation")
   baseline = evaluate()
+  if baseline and not math.isfinite(baseline["val_loss"]):
+    raise EngineError("The base model cannot be scored on this data (the validation loss is not a number). Check the columns for extreme values.")
   if baseline:
     job.log(f"Zero-shot validation: pinball loss {baseline['val_loss']:.5f}, MAE {baseline['val_mae']:.5g}")
     job.add_metric(kind="val", epoch=0, step=0, **baseline)
@@ -391,15 +433,17 @@ def run_finetune(
         g["lr"] = lr_at(step)
       pred = forward(w)
       loss = _loss(pred, to_t(w.future), to_t(w.target), cfg.loss)
-      opt.zero_grad(set_to_none=True)
-      loss.backward()
-      if cfg.grad_clip and cfg.grad_clip > 0:
-        torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
-      opt.step()
-      step += 1
       lv = float(loss.detach())
       if not math.isfinite(lv):
         raise EngineError("Training diverged (loss is NaN/inf). Lower the learning rate.")
+      opt.zero_grad(set_to_none=True)
+      loss.backward()
+      clip = cfg.grad_clip if cfg.grad_clip and cfg.grad_clip > 0 else float("inf")
+      # A step with a NaN gradient would destroy the weights; the loss only shows it one step later.
+      if not math.isfinite(float(torch.nn.utils.clip_grad_norm_(params, clip))):
+        raise EngineError("Training diverged (the gradient is NaN/inf). Lower the learning rate.")
+      opt.step()
+      step += 1
       running.append(lv)
       elapsed = time.time() - t_start
       eta = elapsed / step * (total_steps - step)
@@ -408,12 +452,15 @@ def run_finetune(
       job.update(0.04 + 0.9 * step / total_steps, f"Epoch {epoch}/{cfg.epochs} · step {step}/{total_steps} · loss {lv:.4f} · ETA {eta:.0f}s")
 
     ev = evaluate()
-    train_loss = float(np.mean(running)) if running else float("nan")
+    train_loss = float(np.mean(running)) if running else None
+    train_text = "no training steps" if train_loss is None else f"train {train_loss:.5f}"
+    if ev and not math.isfinite(ev["val_loss"]):
+      raise EngineError("Training diverged (the validation loss is NaN/inf). Lower the learning rate.")
     if ev:
       job.add_metric(kind="val", epoch=epoch, step=step, train_loss=train_loss, **ev)
       improved = ev["val_loss"] < best - 1e-7
       job.log(
-        f"Epoch {epoch}: train {train_loss:.5f} · val loss {ev['val_loss']:.5f} · val MAE {ev['val_mae']:.5g}"
+        f"Epoch {epoch}: {train_text} · val loss {ev['val_loss']:.5f} · val MAE {ev['val_mae']:.5g}"
         + (" (best)" if improved else "")
       )
       if improved:
@@ -424,7 +471,7 @@ def run_finetune(
           job.log(f"Early stopping: no improvement for {bad_epochs} epoch(s).")
           break
     else:
-      job.log(f"Epoch {epoch}: train {train_loss:.5f}")
+      job.log(f"Epoch {epoch}: {train_text}")
       best_state, best_epoch = trainable_state(), epoch
     if stopped_early:
       job.log("Stopped early by user; saving the best weights so far.")

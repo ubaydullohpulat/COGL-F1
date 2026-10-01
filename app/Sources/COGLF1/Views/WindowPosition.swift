@@ -1,17 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Where a view is in its window: its middle, its width, and the width of the window.
-struct WindowSpan: Equatable {
-  var midX: CGFloat
-  var width: CGFloat
-  var window: CGFloat
-}
-
 /// Reports the horizontal middle of the view it is behind, in window coordinates.
 /// The toolbar and the page are separate hosting views, so SwiftUI's own coordinate spaces can't compare them.
 struct WindowMidX: NSViewRepresentable {
-  var report: (WindowSpan) -> Void
+  var report: (CGFloat) -> Void
 
   func makeNSView(context: Context) -> Probe {
     let view = Probe()
@@ -25,8 +18,8 @@ struct WindowMidX: NSViewRepresentable {
   }
 
   final class Probe: NSView {
-    var report: ((WindowSpan) -> Void)?
-    private var last: WindowSpan?
+    var report: ((CGFloat) -> Void)?
+    private var last: CGFloat?
     private var observer: NSObjectProtocol?
 
     override func layout() {
@@ -57,12 +50,11 @@ struct WindowMidX: NSViewRepresentable {
     }
 
     private func send() {
-      guard let window else { return }
-      let rect = convert(bounds, to: nil)
-      let span = WindowSpan(midX: rect.midX.rounded(), width: rect.width.rounded(), window: window.frame.width)
-      guard span != last else { return }
-      last = span
-      report?(span)
+      guard window != nil else { return }
+      let x = convert(bounds, to: nil).midX.rounded()
+      guard x != last else { return }
+      last = x
+      report?(x)
     }
   }
 }
@@ -87,32 +79,127 @@ private struct ModelBarCenter: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .background(WindowMidX { midX = $0.midX })
+      .background(WindowMidX { midX = $0 })
       .preference(key: PageCenterKey.self, value: midX)
   }
 }
 
-/// Shifts a toolbar item sideways so its middle lands on `target`.
-/// An offset, not padding: the toolbar's width counts towards the narrowest the window can be.
+/// Puts a toolbar item's middle on `target`, a position in window coordinates.
 struct CenteredOver<Content: View>: View {
   var target: CGFloat?
   @ViewBuilder var content: () -> Content
-  /// Where the toolbar put the item, before the shift.
-  @State private var own: WindowSpan?
-  /// Room kept free at the window's right edge for the page's own toolbar button.
-  private let trailingRoom: CGFloat = 64
 
   var body: some View {
-    content()
-      .offset(x: shift)
-      .background(WindowMidX { own = $0 })
+    content().background(ToolbarItemShift(target: target))
+  }
+}
+
+/// Moves the toolbar item this view sits in. The item's own AppKit view moves, not only its picture:
+/// an offset draws the bar outside the item, and clicks out there never reach its buttons.
+/// Padding is no way out either: the toolbar's width counts towards the narrowest the window can be.
+struct ToolbarItemShift: NSViewRepresentable {
+  var target: CGFloat?
+
+  func makeNSView(context: Context) -> Mover {
+    let view = Mover()
+    view.target = target
+    return view
   }
 
-  /// As far towards `target` as the item can go without running out of the window.
-  private var shift: CGFloat {
-    guard let target, let own else { return 0 }
-    let furthest = own.window - trailingRoom - own.width / 2 - own.midX
-    return min(target - own.midX, max(0, furthest))
+  func updateNSView(_ view: Mover, context: Context) {
+    view.target = target
+    view.place()
+  }
+
+  final class Mover: NSView {
+    var target: CGFloat?
+    /// The toolbar's own view for this item.
+    private weak var item: NSView?
+    /// Where the toolbar put the item.
+    private var natural: CGFloat?
+    /// Where this view put it.
+    private var placed: CGFloat?
+    private var observer: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      if let observer { NotificationCenter.default.removeObserver(observer) }
+      observer = nil
+      item = nil
+      guard window != nil else { return }
+      // After the toolbar has put this view into its item.
+      DispatchQueue.main.async { [weak self] in self?.attach() }
+    }
+
+    deinit {
+      if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
+
+    private func attach() {
+      var view: NSView? = self
+      while let v = view, v.className != "NSToolbarItemViewer" { view = v.superview }
+      // In a toolbar built some other way the item stays where the toolbar put it, fully clickable.
+      guard let viewer = view, item == nil else { return }
+      item = viewer
+      natural = viewer.frame.origin.x
+      viewer.postsFrameChangedNotifications = true
+      observer = NotificationCenter.default.addObserver(
+        forName: NSView.frameDidChangeNotification, object: viewer, queue: nil
+      ) { [weak self] _ in
+        MainActor.assumeIsolated { self?.toolbarMovedItem() }
+      }
+      place()
+    }
+
+    /// The toolbar lays its items out again on every resize and puts this one back.
+    private func toolbarMovedItem() {
+      guard let item else { return }
+      let x = item.frame.origin.x
+      if let placed, abs(x - placed) < 0.5 { return }
+      natural = x
+      place()
+    }
+
+    func place() {
+      guard let item, let toolbar = item.superview, let natural else { return }
+      let frame = item.frame
+      let gap = Theme.space
+      var free = (toolbar.bounds.minX + gap)...(toolbar.bounds.maxX - gap)
+      for sibling in toolbar.subviews where sibling !== item && !sibling.isHidden {
+        guard let taken = Self.shown(sibling, in: toolbar) else { continue }
+        if taken.midX < frame.midX {
+          free = max(free.lowerBound, min(taken.maxX + gap, free.upperBound))...free.upperBound
+        } else {
+          free = free.lowerBound...min(free.upperBound, max(taken.minX - gap, free.lowerBound))
+        }
+      }
+      let wanted = target.map { toolbar.convert(NSPoint(x: $0, y: 0), from: nil).x }
+      let x = ModelBarPlacement.origin(target: wanted, natural: natural, width: frame.width, free: free)
+      placed = x
+      if abs(frame.origin.x - x) >= 0.5 { item.setFrameOrigin(NSPoint(x: x, y: frame.origin.y)) }
+    }
+
+    /// The part of a neighbour in the toolbar that shows something. Spaces and backgrounds show nothing.
+    private static func shown(_ sibling: NSView, in toolbar: NSView) -> CGRect? {
+      switch sibling.className {
+      case "NSToolbarItemViewer":
+        return sibling.subviews.contains { $0.className.contains("Space") } ? nil : sibling.frame
+      case "NSToolbarTitleView":
+        // The title view is wider than its text.
+        return sibling.subviews.first.map { sibling.convert($0.frame, to: toolbar) } ?? sibling.frame
+      default:
+        return nil
+      }
+    }
+  }
+}
+
+enum ModelBarPlacement {
+  /// Left edge of a bar `width` wide whose middle is on `target`, kept inside `free`: the stretch
+  /// of the toolbar between its neighbours. Without a target or without room it stays at `natural`.
+  static func origin(target: CGFloat?, natural: CGFloat, width: CGFloat, free: ClosedRange<CGFloat>) -> CGFloat {
+    guard let target, free.upperBound - free.lowerBound >= width else { return natural }
+    return min(max(target - width / 2, free.lowerBound), free.upperBound - width).rounded()
   }
 }
 

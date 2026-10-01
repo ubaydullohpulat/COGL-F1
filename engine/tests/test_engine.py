@@ -6,6 +6,7 @@ Run from the repo root:  .venv/bin/python -m pytest engine/tests -q
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -58,6 +59,8 @@ def env(tmp_path_factory):
       "visits": np.r_[50 + 5 * np.cos(t[:n] / 7), [np.nan] * fut],
       "temperature": np.r_[20 + 3 * np.sin(t[:n] / 30), [np.nan] * fut],
       "promo": (t % 14 == 0).astype(float),
+      # Zero for long stretches, like a holiday flag: its running variance is exactly 0 there.
+      "holiday": (t % 90 == 60).astype(float),
     }
   )
   df.loc[10, "sales"] = np.nan  # a gap to interpolate
@@ -106,7 +109,7 @@ def test_dataset_detection(env):
   sheet = ds["sheets"][0]
   assert sheet["time_column"] == "date"
   assert sheet["frequency"] == "D"
-  assert {col["name"] for col in sheet["columns"] if col["numeric"]} == {"sales", "visits", "temperature", "promo"}
+  assert {col["name"] for col in sheet["columns"] if col["numeric"]} == {"sales", "visits", "temperature", "promo", "holiday"}
 
   x = _ok(c.post("/datasets/open", json={"path": env["xlsx"]}))
   names = [s["name"] for s in x["sheets"]]
@@ -320,3 +323,90 @@ def test_finetune_cancel(env):
     time.sleep(0.2)
   assert snap["status"] == "cancelled"
   assert [m["id"] for m in _ok(c.get("/models"))["models"]] == ["tiny"]
+
+
+def _wait(c, job_id, tries=600):
+  """Polls a job the way the app does. Every poll has to answer, or the app shows a frozen job."""
+  for _ in range(tries):
+    snap = _ok(c.get(f"/jobs/{job_id}"))
+    if snap["status"] not in ("queued", "running"):
+      return snap
+    time.sleep(0.2)
+  raise AssertionError("job did not finish: " + "\n".join(snap["logs"]))
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_finetune_with_flat_helper_column(env, device):
+  """A helper column that is constant for a stretch used to turn the weights into NaN after one step."""
+  c = env["client"]
+  ds = _ok(c.post("/datasets/open", json={"path": env["csv"]}))
+  job = _ok(
+    c.post(
+      "/finetune",
+      json={
+        "data": {"dataset_id": ds["dataset_id"], "time_column": "date", "targets": ["sales"], "past_covariates": ["holiday"]},
+        "config": {
+          "base_model_id": "tiny", "output_name": f"tiny flat {device}", "context_length": 128, "horizon": 16,
+          "epochs": 2, "windows_per_epoch": 32, "batch_size": 8, "learning_rate": 1e-3, "device": device,
+        },
+      },
+    )
+  )
+  snap = _wait(c, job["id"])
+  assert snap["status"] == "completed", "\n".join(snap["logs"]) + str(snap["error"])
+  vals = [m for m in snap["metrics"] if m["kind"] == "val"]
+  assert len(vals) == 3  # zero-shot + 2 epochs
+  for m in snap["metrics"]:
+    for k, v in m.items():
+      assert v is not None and (isinstance(v, str) or math.isfinite(v)), f"{k} is not a finite number in {m}"
+  _ok(c.delete(f"/models/{snap['result']['model_id']}"))
+
+
+def test_job_snapshot_survives_nan():
+  """JSON has no NaN. A NaN metric once made every poll of the job fail, so the app froze on it."""
+  from coglf1_engine.jobs import Job
+
+  job = Job("finetune", "t")
+  job.add_metric(kind="val", epoch=1, val_loss=float("nan"), val_mae=float("inf"))
+  job.result = {"best_val_loss": float("nan"), "nested": [1.0, float("-inf")]}
+  snap = job.snapshot()
+  json.dumps(snap, allow_nan=False)
+  assert snap["metrics"][0]["val_loss"] is None and snap["metrics"][0]["epoch"] == 1
+  assert snap["result"] == {"best_val_loss": None, "nested": [1.0, None]}
+
+
+def test_finetune_stop_and_save(env):
+  """Stop & save ends the job early and still writes a model."""
+  c = env["client"]
+  ds = _ok(c.post("/datasets/open", json={"path": env["csv"]}))
+  job = _ok(
+    c.post(
+      "/finetune",
+      json={
+        "data": {"dataset_id": ds["dataset_id"], "targets": ["sales"]},
+        "config": {"base_model_id": "tiny", "output_name": "tiny stopped", "horizon": 16, "context_length": 64, "epochs": 50, "windows_per_epoch": 4096, "device": "cpu"},
+      },
+    )
+  )
+  time.sleep(1.0)
+  _ok(c.post(f"/jobs/{job['id']}/finish"))
+  snap = _wait(c, job["id"], tries=150)
+  assert snap["status"] == "completed", "\n".join(snap["logs"]) + str(snap["error"])
+  assert snap["result"]["model_id"] == "tiny-stopped"
+  _ok(c.delete("/models/tiny-stopped"))
+
+
+def test_load_switch_unload(env):
+  """What the model bar's Load, Switch and Unload buttons ask of the engine."""
+  c = env["client"]
+  assert _ok(c.post("/unload"))["loaded"] is False
+  st = _ok(c.post("/load", json={"model_id": "tiny", "backend": "mlx"}))
+  assert st["loaded"] and st["backend"] == "mlx" and st["model_id"] == "tiny"
+  st = _ok(c.post("/load", json={"model_id": "tiny", "backend": "torch-cpu"}))  # Switch
+  assert st["loaded"] and st["backend"] == "torch-cpu"
+  assert _ok(c.get("/status"))["backend"] == "torch-cpu"
+  st = _ok(c.post("/unload"))
+  assert st["loaded"] is False and "model_id" not in st
+  assert _ok(c.post("/unload"))["loaded"] is False  # unloading twice is harmless
+  r = c.post("/load", json={"model_id": "missing", "backend": "mlx"})
+  assert r.status_code == 400 and "not downloaded" in r.json()["detail"]

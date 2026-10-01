@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Top-center model picker, in the spirit of LM Studio: pick → load → eject.
+/// Top-center model picker, in the spirit of LM Studio: pick → load → unload.
 struct ModelBar: View {
   @Environment(AppState.self) private var state
   @State private var showOptions = false

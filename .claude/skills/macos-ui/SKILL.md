@@ -34,7 +34,7 @@ The window can be as narrow as 960. Nothing may be pushed out of it.
 - Pages read `pageWidth` from the environment and fold their side panels when it is small. Do not raise the window minimum to make a layout fit.
 - Forecast attaches the parameters column (`.inspector`) only when the page is wide enough. Even hidden, it keeps the chart area at least 588 wide. In a narrow window the Parameters button opens the same form in a popover.
 - Fine-tune shows Settings and Progress as two tabs when they do not fit side by side.
-- The model bar is centered over the chart or page content with `CenteredOver` and `.modelBarCenter()`. It is shifted with an offset. Padding in a toolbar item widens the page.
+- The model bar is centered over the chart or page content with `CenteredOver` and `.modelBarCenter()`. `CenteredOver` moves the toolbar item's own AppKit view and keeps it between its neighbours. Do not shift the bar with `.offset`: it is then drawn outside its item, and Load, Switch and Unload stop taking clicks. Padding in a toolbar item widens the page.
 
 ## Copy
 
@@ -53,4 +53,4 @@ Zoom, resizable columns, and reorder belong on the CSV preview. Light and dark i
 
 ## Chart
 
-Zoom with buttons and pinch. When zoomed in, the chart scrolls sideways. The hover info box is an overlay inside the visible plot. Do not attach it with a chart annotation: a scrollable chart clips that annotation, which is why the line showed and the box did not.
+Zoom with buttons and pinch. When zoomed in, the chart scrolls sideways. With a mouse the system keeps the chart's scroll bar on screen and draws it just below the chart's frame; the chart leaves room for it, so it never covers the metric cards. The hover info box is an overlay inside the visible plot. Do not attach it with a chart annotation: a scrollable chart clips that annotation, which is why the line showed and the box did not.

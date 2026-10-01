@@ -66,6 +66,21 @@ cd app && swift build                             # compile the app
 COGLF1_PYTHON=$PWD/../.venv/bin/python .build/debug/COGLF1   # run against the dev venv
 ```
 
+### Tests
+
+```bash
+scripts/check.sh                        # every test: the app (swift test) and the engine (pytest)
+git config core.hooksPath .githooks     # once per clone: run them before every push
+```
+
+With the hook on, `git push` is refused while a test fails. The app's tests are in `app/Tests`, the engine's in `engine/tests`. A fixed bug gets a test that fails without the fix, so it cannot come back unnoticed. The app's tests also run on GitHub for every push (`.github/workflows/tests.yml`); the engine's need the Apple GPU and run only on the Mac.
+
+## Updates
+
+When the app opens it asks GitHub for the latest release of this repository. If that is newer, it offers to update: it downloads the DMG, checks it against the published SHA-256 and the developer's signature, replaces itself and restarts. "Don't show this again" ends the question; Settings → Updates turns it back on and has a manual check, as does the app menu.
+
+To try an update without publishing one, point the app at a local feed: `COGLF1_UPDATE_FEED=file:///path/feed.json` with the JSON shape of GitHub's `releases/latest`.
+
 ## Release
 
 Pushing a version tag builds, notarizes, and publishes the DMG. The tag must match `__version__` in `engine/coglf1_engine/__init__.py`. For `0.1.1` that file contains `__version__ = "0.1.1"` and the tag is `v0.1.1`.

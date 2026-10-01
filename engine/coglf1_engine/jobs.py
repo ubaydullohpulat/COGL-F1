@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 import traceback
@@ -12,6 +13,17 @@ from typing import Any, Callable
 
 class Cancelled(Exception):
   """Raised inside a job when the user asked it to stop."""
+
+
+def _finite(value: Any) -> Any:
+  """Replaces NaN and infinity with None. JSON has neither, so one of them would fail every poll of the job."""
+  if isinstance(value, float):
+    return value if math.isfinite(value) else None
+  if isinstance(value, dict):
+    return {k: _finite(v) for k, v in value.items()}
+  if isinstance(value, (list, tuple)):
+    return [_finite(v) for v in value]
+  return value
 
 
 class Job:
@@ -83,8 +95,8 @@ class Job:
         "started": self.started,
         "finished": self.finished,
         "logs": list(self.logs)[-log_tail:],
-        "metrics": list(self.metrics),
-        "result": self.result,
+        "metrics": _finite(self.metrics),
+        "result": _finite(self.result),
         "error": self.error,
       }
 
